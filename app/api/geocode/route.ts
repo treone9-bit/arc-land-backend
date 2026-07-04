@@ -13,6 +13,7 @@ export interface GeocodeResult {
   lat: number;
   lng: number;
   county: string | null;
+  state: string | null;
   placeId: string;
 }
 
@@ -61,9 +62,12 @@ export async function POST(req: NextRequest) {
     const result = geoData.results[0];
     const location = result.geometry.location;
 
-    // County comes back as an "administrative_area_level_2" component in Florida
+    // County comes back as "administrative_area_level_2", state as "administrative_area_level_1"
     const countyComponent = result.address_components.find((c: { types: string[] }) =>
       c.types.includes("administrative_area_level_2")
+    );
+    const stateComponent = result.address_components.find((c: { types: string[] }) =>
+      c.types.includes("administrative_area_level_1")
     );
 
     const output: GeocodeResult = {
@@ -71,6 +75,7 @@ export async function POST(req: NextRequest) {
       lat: location.lat,
       lng: location.lng,
       county: countyComponent?.long_name ?? null,
+      state: stateComponent?.short_name ?? null,
       placeId: result.place_id,
     };
 
