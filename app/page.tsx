@@ -16,6 +16,23 @@ type LookupMethod = "address" | "parcel_id";
 
 type Bbox = { minLng: number; maxLng: number; minLat: number; maxLat: number };
 
+type CheckoutCompleteResponse = {
+  error?: string;
+  quote: QuoteResult;
+  estMeta: { num: string; date: string };
+  request: {
+    contactName: string | null;
+    contactPhone: string | null;
+    contactEmail: string | null;
+    address: string | null;
+    county: string | null;
+    state: string | null;
+    parcelId: string | null;
+    mapBbox: Bbox | null;
+    parcelRings: number[][][] | null;
+  };
+};
+
 function computeBbox(rings: number[][][] | null, centerLat: number, centerLng: number): Bbox {
   if (rings?.length) {
     const pts = rings.flat();
@@ -40,6 +57,22 @@ function fmt(n: number) {
     minimumFractionDigits: Number.isInteger(n) ? 0 : 2,
     maximumFractionDigits: 2,
   });
+}
+
+// A server crash (timeout, unhandled exception) returns an HTML error page
+// instead of JSON — res.json() on that throws a cryptic parser error
+// ("Unexpected token '<'" in most browsers, "The string did not match the
+// expected pattern" in Safari/WebKit). Surface a message people can act on.
+async function parseJsonResponse<T = unknown>(res: Response): Promise<T> {
+  try {
+    return await res.json();
+  } catch {
+    throw new Error(
+      res.ok
+        ? "The server returned an unexpected response. Please try again."
+        : `Request failed (${res.status}). Please try again in a moment.`
+    );
+  }
 }
 
 export default function Home() {
@@ -133,7 +166,7 @@ export default function Home() {
 
     fetch(`/api/checkout/complete?session_id=${encodeURIComponent(sessionId)}&pending_id=${encodeURIComponent(pendingId)}`)
       .then(async (res) => {
-        const data = await res.json();
+        const data = await parseJsonResponse<CheckoutCompleteResponse>(res);
         if (!res.ok) throw new Error(data.error ?? "Failed to retrieve your estimate");
         setQuote(data.quote);
         setEstMeta(data.estMeta);
@@ -354,7 +387,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data: { url?: string; error?: string } = await res.json();
+      const data = await parseJsonResponse<{ url?: string; error?: string }>(res);
       if (!res.ok || !data.url) throw new Error(data.error ?? "Failed to start checkout");
       window.location.href = data.url;
     } catch (err) {

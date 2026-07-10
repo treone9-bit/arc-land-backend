@@ -8,6 +8,10 @@ import { adminStorage } from "../../../../lib/firebaseAdmin";
 const ESTIMATE_PRICE_CENTS = 699; // $6.99 flat — automatic tax disabled until Stripe Tax is configured (see AUTOMATIC_TAX below)
 const AUTOMATIC_TAX_ENABLED = false;
 
+// Vercel's default serverless timeout (10s) can be tight for a cold start plus
+// a Storage upload plus a Stripe API round trip — give it real headroom.
+export const maxDuration = 30;
+
 export async function POST(req: NextRequest) {
   try {
     if (!process.env.STRIPE_SECRET_KEY) {

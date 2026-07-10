@@ -3,6 +3,12 @@ import { stripeClient } from "../../../../lib/stripe";
 import { generateQuote, QuoteGenerationError, type QuoteResult } from "../../../../lib/quoteGeneration";
 import { adminDb, adminStorage } from "../../../../lib/firebaseAdmin";
 
+// This route runs the full Claude generation (30-90+ seconds for complex jobs,
+// per the measured per-request cost breakdown) — Vercel's default 10s serverless
+// timeout would kill it almost every time. 60s is the max allowed on the Hobby
+// plan; upgrade to Pro (300s max) if the most complex plan takeoffs still time out.
+export const maxDuration = 60;
+
 type EstMeta = { num: string; date: string };
 
 type Bbox = { minLng: number; maxLng: number; minLat: number; maxLat: number };
