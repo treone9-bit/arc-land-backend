@@ -1,0 +1,739 @@
+import { z } from "zod";
+import { createHash, randomUUID } from "crypto";
+import Anthropic from "@anthropic-ai/sdk";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import { adminDb, adminStorage } from "./firebaseAdmin";
+
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+type SaveEstimateParams = {
+  quote: unknown;
+  fromCache: boolean;
+  serviceType: "land_clearing" | "upload_plans";
+  county: string;
+  state: string;
+  zipCode?: string | null;
+  address?: string | null;
+  parcelId?: string | null;
+  ownerName?: string | null;
+  zoning?: string | null;
+  acreage?: number | null;
+  contactName?: string | null;
+  contactPhone?: string | null;
+  contactEmail?: string | null;
+  additionalNotes?: string | null;
+  trades?: string[] | null;
+  serviceTypes?: string[] | null;
+  files?: { data: string; type: string }[] | null;
+};
+
+// Persists the estimate + any uploaded plan files for the admin dashboard.
+// Never allowed to break quote generation — failures are logged, not thrown.
+async function saveEstimateRecord(params: SaveEstimateParams): Promise<void> {
+  if (!process.env.FIREBASE_PROJECT_ID) return; // Firebase not configured — skip silently
+  try {
+    const id = randomUUID();
+    const planFilePaths: string[] = [];
+
+    if (params.files?.length) {
+      const bucket = adminStorage().bucket();
+      for (let i = 0; i < params.files.length; i++) {
+        const f = params.files[i];
+        const ext = f.type === "application/pdf" ? "pdf" : f.type.split("/")[1] ?? "bin";
+        const path = `plans/${id}/${i}.${ext}`;
+        await bucket.file(path).save(Buffer.from(f.data, "base64"), { contentType: f.type });
+        planFilePaths.push(path);
+      }
+    }
+
+    await adminDb()
+      .collection("estimates")
+      .doc(id)
+      .set({
+        serviceType: params.serviceType,
+        county: params.county,
+        state: params.state,
+        zipCode: params.zipCode ?? null,
+        address: params.address ?? null,
+        parcelId: params.parcelId ?? null,
+        ownerName: params.ownerName ?? null,
+        zoning: params.zoning ?? null,
+        acreage: params.acreage ?? null,
+        contactName: params.contactName ?? null,
+        contactPhone: params.contactPhone ?? null,
+        contactEmail: params.contactEmail ?? null,
+        additionalNotes: params.additionalNotes ?? null,
+        trades: params.trades ?? null,
+        serviceTypes: params.serviceTypes ?? null,
+        quote: params.quote,
+        planFilePaths,
+        fromCache: params.fromCache,
+        createdAt: new Date(),
+      });
+  } catch (err) {
+    console.error("Failed to save estimate record:", err);
+  }
+}
+
+const QUOTE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const quoteCache = new Map<string, { data: unknown; expiresAt: number }>();
+
+function cacheKeyFor(data: unknown): string {
+  // Include the live prompt text so editing LAND_CLEARING_PROMPT/PLANS_PROMPT
+  // automatically invalidates old cached quotes instead of serving stale pricing.
+  return createHash("sha256")
+    .update(JSON.stringify(data))
+    .update(LAND_CLEARING_PROMPT)
+    .update(PLANS_PROMPT)
+    .digest("hex");
+}
+
+function getCachedQuote(key: string): unknown | null {
+  const entry = quoteCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    quoteCache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function setCachedQuote(key: string, data: unknown) {
+  quoteCache.set(key, { data, expiresAt: Date.now() + QUOTE_CACHE_TTL_MS });
+}
+
+const BboxSchema = z.object({
+  minLng: z.number(), maxLng: z.number(),
+  minLat: z.number(), maxLat: z.number(),
+});
+
+const FileSchema = z.object({
+  data: z.string(),
+  type: z.enum(["application/pdf", "image/png", "image/jpeg", "image/webp"]),
+});
+
+export const QuoteRequestSchema = z.object({
+  serviceType: z.enum(["land_clearing", "upload_plans"]),
+  county: z.string().min(1),
+  state: z.enum(["FL", "GA"]),
+  zipCode: z.string().nullish(),
+  mapBbox: BboxSchema.nullish(),
+  // Parcel boundary polygon(s), display-only — not used in pricing/generation
+  parcelRings: z.array(z.array(z.array(z.number()))).nullish(),
+  // Contact info (persisted with the saved record, not used in pricing)
+  contactName: z.string().nullish(),
+  contactPhone: z.string().nullish(),
+  contactEmail: z.string().nullish(),
+  address: z.string().nullish(),
+  additionalNotes: z.string().nullish(),
+  // Land clearing fields
+  acreage: z.number().positive().nullish(),
+  parcelAcreage: z.number().positive().nullish(),
+  parcelId: z.string().nullish(),
+  ownerName: z.string().nullish(),
+  zoning: z.string().nullish(),
+  floodZone: z.string().nullish(),
+  sfha: z.boolean().nullish(),
+  wetlandsOnSite: z.boolean().nullish(),
+  wetlandType: z.string().nullish(),
+  // Upload plans fields
+  trades: z.array(z.string()).nullish(),
+  files: z.array(FileSchema).nullish(),
+  // Rich service details (land clearing)
+  serviceDetails: z.object({
+    serviceTypes: z.array(z.string()).optional(),
+    clearingArea: z.string().optional(),
+    vegetationType: z.string().optional(),
+    drainageIssues: z.boolean().optional(),
+    easements: z.boolean().optional(),
+    existingStructures: z.boolean().optional(),
+    accessRoad: z.string().optional(),
+    debrisHandling: z.string().optional(),
+    startDate: z.string().optional(),
+    urgency: z.string().optional(),
+    permitsStatus: z.string().optional(),
+    largerProject: z.boolean().optional(),
+    customClearingPolygon: z.object({
+      sqFt: z.number(),
+    }).optional(),
+    clearingPlanFiles: z.array(FileSchema).optional(),
+  }).nullish(),
+});
+
+const MaterialLineItemSchema = z.object({
+  description: z.string(),
+  partNumber: z.string().optional(),
+  unit: z.string(),
+  qty: z.number(),
+  unitCost: z.number(),
+  total: z.number(),
+});
+
+const LaborLineItemSchema = z.object({
+  description: z.string(),
+  total: z.number().int(),
+});
+
+const TreeInventorySchema = z.object({
+  estimatedCount: z.number().int(),
+  species: z.array(z.string()),
+  sizeDistribution: z.string(),
+  density: z.string(),
+  notes: z.string(),
+});
+
+const QuoteSchema = z.object({
+  summary: z.string(),
+  treeInventory: TreeInventorySchema.optional(),
+  materialLineItems: z.array(MaterialLineItemSchema),
+  laborLineItems: z.array(LaborLineItemSchema),
+  subtotal: z.number().int(),
+  mobilization: z.number().int(),
+  disposal: z.number().int(),
+  total: z.number().int(),
+  estimatedDuration: z.string(),
+  assumptions: z.array(z.string()),
+  warnings: z.array(z.string()),
+});
+
+export type QuoteResult = z.infer<typeof QuoteSchema>;
+export type QuoteRequestData = z.infer<typeof QuoteRequestSchema>;
+
+export class QuoteGenerationError extends Error {
+  status: number;
+  constructor(message: string, status = 400) {
+    super(message);
+    this.status = status;
+  }
+}
+
+const LAND_CLEARING_PROMPT = `You are an expert construction cost estimator with 20+ years of experience in Florida and southern Georgia. Produce accurate, itemized land clearing takeoff estimates.
+
+== PARTIAL LAND / UNDERBRUSH CLEARING (Forestry Mulcher ONLY) ==
+When the service is "Partial Land / Underbrush Clearing", a forestry mulcher is the ONLY machine used.
+
+If a satellite image is provided, analyze it to populate the treeInventory field:
+- Estimate tree/stem count visible in the clearing area using a systematic grid method (divide the area into quadrants, count each quadrant, sum the total) rather than a single whole-image impression; round to the nearest 10 (nearest 5 if under 50)
+- Identify species present (pine, oak, palm, palmetto, etc.)
+- Estimate size distribution (small, medium, large)
+- Note density (sparse, moderate, dense) — cross-reference against the client's selected vegetation type (Light/Medium/Heavy) and note any discrepancy
+
+LINE ITEM 1 — Forestry Mulching (rate based on selected vegetation density):
+- Light vegetation:  $1,200–$2,500/acre
+- Medium vegetation: $2,500–$3,500/acre
+- Heavy vegetation:  $3,500–$5,000/acre
+
+If the aerial image shows a density that differs significantly from the client's selection (e.g., client selected Light but image shows dense canopy), note this discrepancy in the assumptions and price at the higher observed density.
+
+MINIMUM PRICING RULE: Always price a minimum of 1 acre regardless of actual acreage. If the clearing area is less than 1 acre, set qty = 1.00 acre and use the full per-acre rate. Never calculate a total lower than the single-acre rate.
+
+LINE ITEM 2 — Debris Handling (based on client's debris handling selection):
+- "Mulch / leave on property" (no removal): $0 — do NOT add a debris line item
+- "Haul off" (remove debris):
+    Light vegetation:  $500–$800/acre (minimum 1 acre)
+    Medium vegetation: $800–$1,500/acre (minimum 1 acre)
+    Heavy vegetation:  $1,500–$2,500/acre (minimum 1 acre)
+- "Burn on-site (permit required)": $300–$500/acre flat (minimum 1 acre)
+
+Use the acreage provided (custom-drawn area if given, otherwise full parcel acreage). Apply the 1-acre minimum to all line items. Set mobilization to $0 — do not add a mobilization charge. Do not add stump grinding, root raking, or any other line items.
+
+== COMPLETE LAND CLEARING (Conventional Equipment) ==
+When the service is "Complete Land Clearing", you will receive a satellite aerial image of the parcel. Analyze the image carefully to:
+1. Count the total number of visible trees using a systematic grid method — do not eyeball the whole image at once: mentally divide the clearing area into a grid of equal quadrants (4x4 for parcels under 2 acres, larger grids scaled proportionally for bigger parcels), count individual tree canopies quadrant by quadrant, then sum the quadrant counts for the total. Round the final total to the nearest 10 trees (nearest 5 for totals under 50) — this is an imagery-based estimate, not a field count, and false precision overstates confidence in the number.
+2. Identify species present — use what is common for FL/GA (pine, live oak, water oak, laurel oak, sabal palm, cypress, magnolia, sweetgum, etc.)
+3. Estimate size distribution: small (<6" DBH), medium (6–18" DBH), large (>18" DBH) — apply these percentages to the rounded total count from step 1, then round each size-category count to the nearest 5
+4. Assess density: sparse, moderate, or dense — base this directly on the counted total ÷ clearing acreage (trees/acre), not a separate visual impression: under 15 trees/acre = sparse, 15–40 = moderate, over 40 = dense
+5. Note any special observations (standing water, dense canopy, palmettos, etc.)
+
+Populate the treeInventory field with this analysis. Use it to price the job accurately.
+
+PRICING — use the ranges below as market benchmarks for FL / south GA (2026). Within each range, always target the LOW end of the zip code's local market rate — do not scale up for higher-cost zip codes (South FL, coastal GA included). Generate the following line items:
+
+1. Tree Removal — Small (<6" DBH): $75–$150/tree — qty = estimated small tree count from image
+2. Tree Removal — Medium (6–18" DBH): $150–$400/tree — qty = estimated medium tree count from image
+3. Tree Removal — Large (>18" DBH): $400–$1,200/tree — qty = estimated large tree count from image
+4. Stump Grinding: $75–$200/stump — qty = total estimated stump count (sum of all tree sizes)
+5. Root Digging / Grubbing: $500–$1,500/acre — mechanical extraction of root balls and root systems after tree removal; qty = clearing acreage
+6. Underbrush / Partial Clearing (Forestry Mulcher): ground-level vegetation, brush, and small stems — price per acre based on selected vegetation density:
+   - Light vegetation:  $1,200–$2,500/acre
+   - Medium vegetation: $2,500–$3,500/acre
+   - Heavy vegetation:  $3,500–$5,000/acre
+   Apply 1-acre minimum if area is less than 1 acre.
+7. Tree Debris Disposal — price based on debris handling selection:
+   - "Haul off": $300–$600/load — estimate number of loads based on tree count and density
+   - "Chip/mulch on-site": $200–$500/acre
+   - "Burn on-site (permit required)": $300–$500/acre
+
+Within each range, always choose a rate at the low end of the zip code's local market. Do NOT add site grading, cleanup, or mobilization line items.
+
+Line items must reflect the actual estimated tree count from your image analysis. Show qty as number of trees (by size category) for removal line items, acres for per-acre items, and loads/tons for disposal.
+
+== COMPLETE LAND CLEARING — PLANS VS. SATELLITE COMPARISON ==
+When clearingArea is "Per Construction Plans" and both a satellite image and construction plans are provided:
+- Cross-reference the plans against the satellite image to identify ONLY the areas that need clearing
+- Note which trees and vegetation fall within the planned clearing footprint
+- Count only trees in the clearing area (not the whole parcel)
+- Price accordingly — if clearing area is smaller than full parcel, adjust quantities to match
+- In the summary, briefly describe what the plans show and how it compares to existing site conditions
+
+== ALL CLEARING JOBS ==
+- Wetland delineation: $1,500–$4,000 flat if wetlands present
+- Flood zone SFHA: add dewatering line + elevation certificate note
+- Permit requirement: if the parcel's zoning indicates agricultural use (e.g. "AG", "Agricultural", "A-1", "A-2", or similar county agricultural designations), no permit is required for land clearing itself — state this explicitly as an assumption and do NOT include a land-clearing permit warning. For all other zoning, include a warning that a land-clearing permit may be required from the county. This does not apply to the separate burn-on-site permit, which is still required whenever "Burn on-site" debris handling is selected, regardless of zoning.
+
+Line item categorization (required): every clearing service in this scope (forestry mulching, tree removal, stump grinding, root digging/grubbing, debris handling/disposal, wetland delineation, dewatering) is an equipment/labor service with no separately purchased material — put the full cost of each into laborLineItems (description + total only). materialLineItems should be empty for standard clearing jobs unless a physical material is actually purchased and left on site.
+
+Accounting rules:
+- subtotal = sum of all materialLineItems totals + sum of all laborLineItems totals (not mobilization or disposal)
+- mobilization = 0 always — do not charge a mobilization fee for any clearing service
+- total = subtotal + mobilization + disposal
+- Material line items: show unit, qty, and unitCost (cost per unit) — total = qty × unitCost; qty to 2 decimal places
+- Labor line items: show ONLY a total dollar amount for that labor scope — no qty or per-unit rate
+- All dollar amounts as integers
+- Include 3–8 assumptions and all permit/wetland/flood warnings`;
+
+const PLANS_PROMPT = `You are an expert construction cost estimator with 20+ years of experience in Florida and southern Georgia. A client has uploaded construction plans. Read them carefully and produce detailed quantity takeoffs and cost estimates for the requested trades.
+
+TAKEOFF METHODOLOGY (required — follow this before pricing anything):
+- DEFAULT CASE — PLANS ONLY, NO MATERIAL LIST PROVIDED: most jobs will include ONLY design drawings, with no supplier quote attached. This is the normal case, not a degraded one — every rule below must independently produce accurate, complete quantities directly from the drawings themselves. Never lower your rigor, hedge with vague quantities, or ask the client to supply a material list; measuring and counting directly off the plans (per the rules below) is the primary method, always available and always required.
+- SUPPLIER QUOTES, WHEN PROVIDED, ARE A BONUS CROSS-CHECK — NOT A REQUIREMENT: if one of the uploaded files happens to also be a supplier price quote or invoice for THIS project (itemized part numbers, quantities, unit prices, and a subtotal — e.g. a Ferguson or similar distributor quote), treat it as an already-completed, verified takeoff for that portion of the job and use its exact quantities/prices directly instead of re-measuring those specific items. Identify it by its format (a priced order form, not a design drawing). This only ever applies on top of the plan-reading rules below — it never replaces them, since most items on most jobs will have no matching quote line at all.
+- Review EVERY page/sheet provided, not just the first one. Civil plan sets typically span multiple sheets (paving/grading/drainage, water/sewer, SWPPP, details) and each sheet shows different proposed work — skipping a sheet means missing real scope.
+- On each sheet, read the LEGEND first to identify every symbol used for proposed work (proposed catch basin, proposed pipe by size/type, proposed manhole, proposed water main, proposed sewer main, proposed valve, proposed backflow device, proposed fire hydrant, etc.). Distinguish PROPOSED from EXISTING — only proposed work gets a line item unless the scope explicitly covers modifying existing infrastructure.
+- Count every occurrence of each proposed symbol on the plan (every catch basin marker, every valve symbol, every hydrant) — do not round or estimate a count when the plan shows discrete, countable symbols.
+- PIPE MEASUREMENT (do this carefully — this is the most error-prone part of the takeoff): a printed length callout on the plan (e.g. "140 LF") always wins — use it directly and skip measuring. When no callout exists, measure using the sheet's GRAPHIC scale bar (the drawn ruler graphic), not just the printed ratio text (e.g. "1" = 30'-0""), since a PDF page can be resized during export/scanning so the printed ratio no longer matches actual on-page distances — calibrate against the graphic bar's own length. Trace each pipe run segment by segment between its actual endpoints (structure to structure — catch basin to catch basin, catch basin to manhole, tie-in point to first structure, etc.); do not eyeball the whole run as one guess. Sum the segment lengths per distinct pipe size/material for that line item's qty. After finishing a pipe quantity, re-trace the same run a second time independently — if the two measurements disagree by more than ~10%, remeasure a third time and use the median, and note the uncertainty in assumptions rather than silently picking one.
+- Read any schedule or table printed on the sheet (pipe crossing tables, structure schedules, fixture counts, general notes) — these give exact quantities directly and take priority over visual estimation or measurement.
+- Cross-reference every material identified against the FERGUSON WATERWORKS CATALOG, FERGUSON PVC DRAINAGE & PRESSURE PIPE, FERGUSON PVC-DWV FITTINGS & PLUMBING ACCESSORIES, and DRAINAGE STRUCTURES catalogs below by matching size and type — use the exact catalog part number and price whenever it matches. Only fall back to a benchmark range when nothing in any catalog matches.
+- Produce a COMPLETE takeoff: many precise, smaller line items (one per pipe size, one per valve type, one per structure type/size) beats consolidating into a single vague line. If plans show catch basins in two different sizes, that's two line items with the correct quantity each, not one.
+- Sanity-check every quantity against realistic project scale before finalizing: a quantity that implies an absurd site size (e.g. thousands of feet of pipe on a sub-acre parcel, or dozens of catch basins on a small lot) signals a measurement error — remeasure it rather than reporting it.
+- Note in assumptions anything visible on the plans that couldn't be confidently sized or counted from the imagery — don't silently omit it from the takeoff.
+- FINAL REVIEW PASS (required, do this last): before writing the final output, re-open every sheet one more time and check your complete draft line-item list against what's actually drawn — confirm nothing was miscounted, no size/type label was misread, and no proposed item found earlier was dropped along the way. Treat this as a required audit step, not optional polish.
+
+Line item categorization (required for every trade below): split every cost into materialLineItems and laborLineItems — never output a single bundled line covering both.
+- MATERIAL: anything with a physical unit that is purchased (concrete, block, brick, rebar/reinforcement, forming lumber, pipe, fittings, fixtures, etc.). Show unit, qty, and unitCost (cost per unit) — total = qty × unitCost.
+- LABOR: installation, placement, equipment operation/rental, and crew time. Show ONLY a total dollar amount for that labor scope — no qty or per-unit rate.
+- Where a benchmark below gives one bundled rate covering both material and labor, split it using standard cost-breakdown norms for that trade (material is typically 30–50% of installed cost for mechanical trades like plumbing; 40–55% for masonry/concrete) — split the SAME benchmark range given, don't invent a new total.
+- Trades that are pure equipment/site services with no purchased material (grading, excavation) are entirely labor — do not fabricate a material line for them.
+
+Wherever a rate below is tied to "the zip code's local market rate," always target the LOW end of that market rate — do not scale up for higher-cost zip codes.
+
+Pricing benchmarks (FL / south GA, 2026):
+
+GRADING: Read the plans carefully to extract grade elevations, cut/fill areas, drainage slopes, and site boundaries. Generate these line items:
+- Rough Grading: $1,500–$2,500/acre (target the low end of the market rate for zip)
+- Fine / Finish Grading: $2,500–$4,000/acre
+- Cut / Fill Earthwork: $10–$18/cy — extract volume from plan contours or notes if shown; otherwise estimate from site area and elevation change
+- Soil Compaction: $300–$500/test — 1 test per acre
+- Fill Import (if plans show fill needed): clean fill dirt is sold by the load, not by the cy — $230.00/load, 17 cy per load (delivery/haul already included in the per-load price; do not add a separate haul line). Calculate total fill volume needed in cy from the plans, divide by 17, and round UP to the nearest whole load (partial loads aren't sold) — that whole-number load count is the qty. Material line item: unit = "load", qty = load count, unitCost = $230.00.
+- Retention / Drainage Swales (if shown on plans): $25–$55/linear ft
+Note: if the plans show specific grade elevations or cut/fill volumes, use those exact quantities. If not shown, state the assumption in the assumptions list.
+
+EXCAVATION: general $8–$25/cy; foundation footings $3,000–$8,000/building; utility trenching $15–$35/lf
+
+UNDERGROUND PLUMBING: below-slab and yard supply/waste lines —
+- Underground water service (meter to structure): $2,000–$5,000
+- Underground sewer/waste line: $15–$35/lf
+- Under-slab rough plumbing (supply + DWV stub-outs): $4,000–$8,000/bathroom
+- Lift station (if required by site grade/plans): $15,000–$40,000
+- Whenever the plans call for water main/sewer utility hardware or PVC drainage/pressure pipe and fittings matching an item in the FERGUSON WATERWORKS CATALOG, FERGUSON PVC DRAINAGE & PRESSURE PIPE, or FERGUSON PVC-DWV FITTINGS & PLUMBING ACCESSORIES catalogs below (pipe, valves, hydrants, backflow preventers, taps, saddles, restraints, elbows, traps, nipples), use that exact part and unit cost as its own material line item instead of estimating within the ranges above — always include the part number in the materialLineItems "partNumber" field.
+
+FERGUSON WATERWORKS CATALOG (Pompano Beach, FL branch — exact contractor pricing; use whenever a required material matches, quantities per job vary by takeoff, not by these reference qtys):
+- A18810020DW — 18x20 F2648 Perforated HDPE Pipe: $33.75/ft
+- A18650020DW — 18x20 F2648 Watertite Solid HDPE Pipe: $31.55/ft
+- A15810020DW — 15x20 F2648 Perforated HDPE Pipe: $25.33/ft
+- A15650020DW — 15x20 F2648 Watertite Solid HDPE Pipe: $23.69/ft
+- SDR35PU14 — 6x14 SDR35 PVC Gasket-Joint Sewer Pipe: $6.89/ft
+- SDR35P1014 — 10x14 SDR35 PVC Gasket-Joint Sewer Pipe: $19.45/ft
+- MJTSDI12U — 12x6 MJ Tapping Sleeve for DI: $4,235.08/ea
+- AFC2506MMLAOL — 6" DI MJ Resilient-Wedge OL Gate Valve L/A: $1,092.84/ea
+- AFC2506TMLAOL — 6" DI MJ Resilient-Wedge OL Tapping Valve L/A: $1,699.06/ea
+- AFT52PU — 6" CL52 Ductile Iron Fastite Pipe: $43.79/ft
+- FPPUU — 6x6'0 Flange x PE Ductile Iron Spool: $1,006.60/ea
+- CFU — 6" DI C110 125# Threaded Companion Flange for Steel: $198.52/ea
+- U90U — 6" DI UL/FM Wafer Check Valve: $411.10/ea
+- IGNUCL — 6" Close Galvanized Steel Nipple: $538.56/ea
+- D90DCS6025F — 6x2-1/2 Angle Siamese Connection, Auto Sprinkler: $779.00/ea
+- GDATRFU — 3/4x6 Hot-Dip Galvanized All-Thread Rod: $5.32/ft
+- GDHNF — 3/4" Galvanized Heavy Hex Nut: $1.94/ea
+- GFSWF — 3/4" Galvanized Flat Steel Washer: $0.80/ea
+- SSLDE6AP — 6" DI Wedge Restraint (OneLok) W/A: $116.10/ea
+- AFCB84BLAOLP — 5-1/4" Fire Hydrant, B84B, 4'0" Bury, OL, L/A: $4,417.20/ea
+- R202N132072 — 12x2 IP Double Stainless Strap Nylon Saddle: $375.91/ea
+- FFB11007NL — 2" MIP x CTS PJ Ball Corporation Stop (lead-free): $361.73/ea
+- WLF009M2QTFSK — 2" LF RPZ Backflow Preventer Assembly: $888.33/ea
+
+FERGUSON PVC DRAINAGE & PRESSURE PIPE (Tamarac, FL branch — exact contractor pricing, converted to $/ft from stock 10'/20' stick pricing; use whenever a plan calls for PVC pipe in these diameters):
+- P40FCPM20 — 3" Schedule 40 PVC Foam Core Pipe: $1.78/ft
+- P40PM20 / P40PM10 — 3" Schedule 40 PVC-DWV Plain End Drainage Pipe: $2.49/ft
+- P40BEPM20 — 3" Schedule 40 Bell End x Plain End PVC Pressure Pipe: $2.63/ft
+- P80PM — 3" Schedule 80 PVC Pressure Pipe, Plain End: $23.05/ft
+- P80BM — 3" Schedule 80 PVC Pressure Pipe, Bell End: $24.33/ft
+- P40FCPP20 — 4" Schedule 40 PVC Foam Core Pipe: $2.59/ft
+- P40PP20 / P40PP10 — 4" Schedule 40 PVC-DWV Plain End Drainage Pipe: $3.39/ft
+- P40FCPU20 — 6" Schedule 40 PVC Foam Core Pipe: $5.00/ft
+- P40PU20 / P40PU10 — 6" Schedule 40 PVC-DWV Plain End Drainage Pipe: $6.63/ft
+- P40FCPX20 — 8" Schedule 40 PVC Foam Core Pipe: $7.61/ft
+- P40PX20 / P40PX10 — 8" Schedule 40 PVC-DWV Plain End Drainage Pipe: $10.35/ft
+- SDR35PX20 — 8" SDR 35 PVC Gasket-Joint Drainage Pipe (green): $18.05/ft
+- P40BEPF10 — 3/4" Schedule 40 PVC Pressure Pipe: $0.46/ft
+- CPFGPF20 — 3/4" SDR 11 CPVC (FlowGuard Gold) Pressure Pipe: $0.79/ft
+- PEXBF20WH — 3/4" PEX-B Tubing: $0.65/ft
+- LHARDF20 — 3/4" Type L Hard Copper Tube: $6.57/ft
+
+FERGUSON PVC-DWV FITTINGS & PLUMBING ACCESSORIES (Tamarac, FL branch — exact contractor pricing, each):
+- PDWVS2K — 2" PVC DWV 22-1/2° Street Elbow: $8.76/ea
+- PDWVS4K — 2" PVC DWV 45° Street Elbow: $3.53/ea
+- PDWV2K — 2" PVC DWV 22-1/2° Elbow: $5.46/ea
+- PDWVLS9K — 2" PVC DWV 90° Long Turn Elbow: $5.65/ea
+- PDWVPTK — 2" PVC DWV P-Trap: $9.21/ea
+- P40S9F — 3/4" PVC Schedule 40 90° Elbow: $0.87/ea
+- P40SS9F — 3/4" PVC Schedule 40 90° Street Elbow: $2.81/ea
+- P40S4F — 3/4" PVC Schedule 40 45° Elbow: $1.63/ea
+- PFWR — PROFLO Heavy Duty Wax Ring, 3-4" waste lines: $1.90/ea
+- PFX146472 — PROFLO Braided Stainless Toilet Flex Connector, 3/8" comp x 7/8" x 12": $7.36/ea
+- IBNDK — PROFLO 1/2x2" MPT Black Carbon Steel Nipple: $1.96/ea
+- IBNFK — PROFLO 3/4x2" MPT Black Carbon Steel Nipple: $1.99/ea
+Note: pipe above is stocked in fixed 10'/20' sticks — the $/ft rate is for pricing measured field footage from the takeoff; do not round quantities up to whole stick lengths.
+
+DRAINAGE STRUCTURES (catch basins/grates — Hampton Concrete Products, exact pricing; use whenever plans show catch basins as part of grading/site drainage. These items have no SKU — set the "partNumber" field to just "Hampton Concrete" (the vendor name), do NOT repeat the item description there):
+- 22x30x36 Catch Basin w/ Bottom: $325.00/ea
+- 30x38x42 Catch Basin w/ Bottom: $1,920.00/ea
+- 22x30 Angle Grate: $217.00/ea
+- 22x30 Heavy-Duty Angle Grate: $293.00/ea
+- Freight/delivery for catch basin orders: ~$2,000 flat per delivery — classify as a labor line item ("Catch Basin Freight/Delivery"), not material, and only include once per job when catch basins are ordered.
+
+SEPTIC: new system, tank + drainfield —
+- Standard 3-bedroom system (FL/GA baseline): $8,000–$15,000
+- Additional bedroom capacity: +$1,500–$2,500/bedroom over 3
+- Permit & percolation test: $500–$1,200
+- Aerobic treatment unit (if required by soil conditions or flood zone): +$5,000–$10,000
+
+CONCRETE QUANTITY CALCULATION (ready-mix — apply this wherever "ready-mix concrete" pricing is called for below): cubic yards = (length in ft × width in ft × depth in ft) ÷ 27. Take length/width/depth directly from the plans (slab dimensions, footing/wall cross-section × run length, etc.) — use printed dimensions over scaled measurement wherever shown, same priority as the pipe-measurement rule above. Add a 10% waste margin to the calculated volume (round up), matching standard ready-mix supplier practice (Cemex and similar suppliers recommend a 10–15% overage for spillage and surface variance) — state the raw calculated volume and the with-waste qty used in assumptions. Ready-mix concrete has no fixed public price (suppliers quote per delivery/market) — price it to the zip code's local market rate as instructed elsewhere in this prompt, low end of range.
+
+FOUNDATIONS: brick foundation walls, priced by brick count — not square footage.
+- Extract wall linear footage and wall height from the plans; estimate total brick count (standard modular brick ≈ 7 bricks per sf of wall face — adjust if plans specify a different brick size or coursing). Subtract door/window openings from the wall area before converting to brick count.
+- Labor: $6.00/brick — fixed rate, do not vary by zip
+- Material: $0.55–$0.95/brick — always target the low end of the zip code's local material market rate
+- Generate two line items: "Foundation Wall Labor (brick)" and "Foundation Wall Material (brick)", both with qty = total brick count
+- Footings beneath the brick wall (if shown on plans): $25–$55/lf, separate line item
+
+ELECTRICAL: service 200A $3,000–$6,000; rough-in $3–$6/sf; panel $2,000–$4,000; underground $15–$40/lf
+
+MASONRY: CBS block walls $18–$35/sf; brick veneer $20–$40/sf; poured concrete walls $15–$30/sf; reinforced block $22–$40/sf
+
+COMPLETE HOME BUILD: block/brick shell only, from plans. Covers foundation and exterior wall shell only — roofing, electrical, interior finish, and ALL window/door/roof framing (trusses, sheathing, structural framing, window openings, exterior doors) are OUT OF SCOPE for this service; never add a "Framing & Shell" line or any window/door/roof-framing line item. If land clearing (Complete Land Clearing or Partial Land / Underbrush Clearing) is also requested as part of this build, price and list those clearing line items FIRST, ahead of every trade below, using the land-clearing rates elsewhere in this system prompt. Read the plans carefully and generate line items for every applicable trade/system shown or required within that scope — do not price this as a single lump sum. In construction sequence order:
+- Grading: use the GRADING rates above (rough grading, fine/finish grading, cut/fill earthwork, soil compaction, fill import, retention swales) — include whichever line items the plans/site call for
+- Excavation: use the EXCAVATION rates above (general cy, foundation footings, utility trenching)
+- Foundation: if plans show a brick foundation wall, use the brick model (labor $6.00/brick + $0.55–$0.95/brick zip-market material); if CBS block, use $2.00/block flat as the material cost (does not vary by zip) plus a separate block-laying labor line at standard regional masonry labor rates; if poured concrete (slab-on-grade or stem wall), calculate ready-mix concrete qty per the CONCRETE QUANTITY CALCULATION rule above and price it to the zip code's local market rate, concrete forming lumber (formwork) at Home Depot (depot.com) contractor-account rates, and rebar/reinforcement/accessories at Resteel (resteel.com) wholesale rates
+- Exterior Wall Finish (block/brick shell): structural shell and exterior finish coat are SEPARATE line items — block does not replace stucco, and stucco does not replace block. Determine the structural shell first: if brick elevations are shown, use the brick model (labor $6.00/brick + $0.55–$0.95/brick zip-market material); if CBS block, use $2.00/block flat as the material cost plus a separate block-laying labor line; if wood/metal-framed wall (no masonry shell shown), use siding $12–$25/sf installed instead of a block/brick line. THEN, separately, price the exterior finish coat actually shown on the elevations: stucco finish over CBS block is its own line item at $4–$8/sf of wall face (3-coat stucco, materials + application labor combined) — do not use the $12–$25/sf siding rate for a stucco finish over block, that rate is for standalone framed-wall siding systems, not a finish coat over masonry. Brick veneer/elevations need no separate finish coat (brick is both structure and finish). Subtract door/window openings from the wall area when computing both the shell and the finish-coat quantity (same as the brick-count rule above) — but do not add any separate line item for the window/door framing or installation itself, that trade is out of scope per above.
+- Lintels & Sills (CBS block/brick openings only): every door and window opening in a block or brick wall needs a lintel (spanning the top of the opening) and, for windows, a sill (at the bottom). Sum the linear footage of all door/window opening widths shown on the elevations (add ~16" total bearing per opening, standard 8" bearing each side, to the raw opening width). Precast Concrete Lintel: $9.00–$14.00/lf. Precast Concrete Sill (windows only, not doors): $10.00–$16.00/lf. Two separate line items.
+- Underground Plumbing / Septic: use the rates above for whichever the plans show (municipal sewer/water connection vs. on-site septic system) — price plumbing and drainage materials at Ferguson (ferguson.com) wholesale/contractor-account rates
+- Wall Pour Concrete (poured foundation/retaining walls, where separate from the Foundation line above): calculate ready-mix concrete qty per the CONCRETE QUANTITY CALCULATION rule above and price it to the zip code's local market rate, forming lumber at Home Depot (depot.com) contractor-account rates, and rebar/accessories at Resteel (resteel.com) wholesale rates
+- Overhead & Builder Profit: 12–18% of the line items above — include as its own line item, not folded into mobilization
+Only include line items for trades/systems actually shown in or implied by the plans — e.g. skip grading if the site is already level and plans show no cut/fill, skip septic if plans show a municipal sewer connection. Use finish-quality cues in the plans (custom millwork, upgraded elevations) to place each range near the top; track-home / builder-grade specs price near the bottom.
+
+If dimensions are unclear from the plans, estimate from visible scale or typical construction for the region and note it as an assumption.
+
+Accounting rules:
+- subtotal = sum of all materialLineItems totals + sum of all laborLineItems totals (not mobilization or disposal)
+- mobilization = 0 always — do not charge a mobilization fee for any trade
+- total = subtotal + mobilization + disposal
+- Material line items: show unit, qty, and unitCost (cost per unit) — total = qty × unitCost; qty to 2 decimal places. When unitCost comes from an exact supplier catalog above (Ferguson, Hampton Concrete), keep the exact cents from that catalog rather than rounding to a whole dollar; otherwise round unitCost/total to whole dollars. partNumber must stay short (an actual SKU, or a brief vendor tag like "Hampton Concrete") — never repeat the description text there, and leave it out entirely when no catalog match applies.
+- Labor line items: show ONLY a total dollar amount for that labor scope — no qty or per-unit rate; whole dollars
+- Include 3–8 assumptions; flag any items that need field verification`;
+
+async function fetchAerialImageBase64(bbox: { minLng: number; maxLng: number; minLat: number; maxLat: number }): Promise<string | null> {
+  try {
+    const url = new URL("https://server.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/export");
+    url.searchParams.set("bbox", `${bbox.minLng},${bbox.minLat},${bbox.maxLng},${bbox.maxLat}`);
+    url.searchParams.set("bboxSR", "4326");
+    url.searchParams.set("size", "1024,768");
+    url.searchParams.set("format", "png");
+    url.searchParams.set("transparent", "false");
+    url.searchParams.set("f", "image");
+    const res = await fetch(url.toString(), { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return null;
+    const buffer = await res.arrayBuffer();
+    return Buffer.from(buffer).toString("base64");
+  } catch {
+    return null;
+  }
+}
+
+// Generates a quote from an already-validated request. Callers must gate
+// access to this (payment, auth, etc.) — it has no gate of its own.
+export async function generateQuote(rawBody: unknown): Promise<QuoteResult> {
+  const parsed = QuoteRequestSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    throw new QuoteGenerationError(
+      `Invalid request: ${JSON.stringify(z.flattenError(parsed.error))}`,
+      400
+    );
+  }
+
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new QuoteGenerationError("Server misconfiguration", 500);
+  }
+
+  const cacheKey = cacheKeyFor(parsed.data);
+
+  const {
+    serviceType,
+    acreage,
+    parcelAcreage,
+    county,
+    state,
+    zipCode,
+    address,
+    mapBbox,
+    parcelId,
+    ownerName,
+    zoning,
+    floodZone,
+    sfha,
+    wetlandsOnSite,
+    wetlandType,
+    contactName,
+    contactPhone,
+    contactEmail,
+    additionalNotes,
+    trades,
+    files,
+    serviceDetails,
+  } = parsed.data;
+
+  try {
+    const cached = getCachedQuote(cacheKey);
+    if (cached) {
+      await saveEstimateRecord({
+        quote: cached,
+        fromCache: true,
+        serviceType,
+        county,
+        state,
+        zipCode,
+        address,
+        parcelId,
+        ownerName,
+        zoning,
+        acreage,
+        contactName,
+        contactPhone,
+        contactEmail,
+        additionalNotes,
+        trades,
+        serviceTypes: serviceDetails?.serviceTypes,
+        files,
+      });
+      return cached as QuoteResult;
+    }
+
+    if (serviceType === "upload_plans") {
+      if (!files?.length || !trades?.length) {
+        throw new QuoteGenerationError(
+          "upload_plans requires at least one file and at least one trade",
+          400
+        );
+      }
+
+      const tradeList = trades.join(", ");
+      const sd = serviceDetails;
+      const userMessage = [
+        `Produce a construction takeoff estimate for the following services: ${tradeList}.`,
+        `County: ${county}, ${state}`,
+        acreage ? `Site area: ${acreage} acres` : null,
+        sd?.drainageIssues ? `Site drainage/slope/wetland issues: Yes` : null,
+        sd?.easements ? `Easements/ROW present: Yes` : null,
+        sd?.existingStructures ? `Existing structures/debris to remove: Yes` : null,
+        sd?.accessRoad ? `Site access: ${sd.accessRoad}` : null,
+        sd?.urgency && sd.urgency !== "Flexible" ? `Urgency: ${sd.urgency}` : null,
+        sd?.startDate ? `Desired start: ${sd.startDate}` : null,
+        sd?.permitsStatus ? `Permits: ${sd.permitsStatus}` : null,
+        "The construction plans are attached. Read the plans and extract quantities for each service listed.",
+        additionalNotes ? `\nCLIENT'S ADDITIONAL INSTRUCTIONS (read carefully, apply to the estimate — this may call out a custom request, a scope change, or a detail on the plans that overrides a general assumption above):\n${additionalNotes}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      const includesClearing = trades.some(
+        (t) => t === "Complete Land Clearing" || t === "Partial Land / Underbrush Clearing"
+      );
+      const system = includesClearing ? `${PLANS_PROMPT}\n\n${LAND_CLEARING_PROMPT}` : PLANS_PROMPT;
+
+      let aerialImageBase64: string | null = null;
+      if (includesClearing && mapBbox) {
+        aerialImageBase64 = await fetchAerialImageBase64(mapBbox);
+      }
+
+      const planBlocks: Anthropic.MessageParam["content"] = files.map((f) =>
+        f.type === "application/pdf"
+          ? ({ type: "document", source: { type: "base64", media_type: f.type, data: f.data } } as const)
+          : ({ type: "image", source: { type: "base64", media_type: f.type, data: f.data } } as const)
+      );
+
+      const contentBlocks: Anthropic.MessageParam["content"] = aerialImageBase64
+        ? [
+            { type: "text", text: "AERIAL SATELLITE IMAGE of the parcel (for land clearing tree/density analysis):" },
+            { type: "image", source: { type: "base64", media_type: "image/png", data: aerialImageBase64 } },
+            { type: "text", text: "CONSTRUCTION PLANS (for structural takeoff):" },
+            ...planBlocks,
+          ]
+        : planBlocks;
+
+      const stream = client.messages.stream({
+        model: "claude-opus-4-8",
+        max_tokens: 28000,
+        thinking: { type: "adaptive" },
+        system,
+        messages: [
+          {
+            role: "user",
+            content: [...contentBlocks, { type: "text", text: userMessage }],
+          },
+        ],
+        output_config: { format: zodOutputFormat(QuoteSchema) },
+      });
+      const message = await stream.finalMessage();
+
+      if (!message.parsed_output) {
+        console.error("Quote parse failure (upload_plans):", message.stop_reason, JSON.stringify(message.content).slice(0, 2000));
+        throw new QuoteGenerationError("Failed to generate quote", 500);
+      }
+      setCachedQuote(cacheKey, message.parsed_output);
+      await saveEstimateRecord({
+        quote: message.parsed_output,
+        fromCache: false,
+        serviceType,
+        county,
+        state,
+        zipCode,
+        address,
+        parcelId,
+        ownerName,
+        zoning,
+        acreage,
+        contactName,
+        contactPhone,
+        contactEmail,
+        additionalNotes,
+        trades,
+        serviceTypes: serviceDetails?.serviceTypes,
+        files,
+      });
+      return message.parsed_output;
+    }
+
+    // Land clearing path
+    if (!acreage) {
+      throw new QuoteGenerationError("acreage is required for land clearing", 400);
+    }
+
+    const sd = serviceDetails;
+    const hasCompleteClear = sd?.serviceTypes?.includes("Complete Land Clearing");
+    const hasPartialClear = sd?.serviceTypes?.includes("Partial Land / Underbrush Clearing");
+    const isPlanArea = sd?.clearingArea === "Per Construction Plans";
+
+    // Fetch aerial image for any clearing service (tree/density analysis)
+    let aerialImageBase64: string | null = null;
+    if ((hasCompleteClear || hasPartialClear) && mapBbox) {
+      aerialImageBase64 = await fetchAerialImageBase64(mapBbox);
+    }
+
+    const userMessage = [
+      "Generate a land clearing takeoff estimate for the following parcel:",
+      sd?.customClearingPolygon
+        ? `- Clearing Area (user-drawn partial area): ${(acreage!).toFixed(4)} acres (${Math.round(acreage! * 43560).toLocaleString()} sq ft) — base ALL line-item quantities on this area`
+        : `- Acreage to Clear: ${acreage} acres`,
+      parcelAcreage ? `- Total Parcel Size: ${parcelAcreage} acres (for context only — estimate based on clearing area above)` : null,
+      `- County: ${county}, ${state}`,
+      zipCode ? `- ZIP Code: ${zipCode} (use this for market-rate pricing)` : null,
+      parcelId ? `- Parcel ID: ${parcelId}` : null,
+      ownerName ? `- Owner: ${ownerName}` : null,
+      zoning ? `- Zoning: ${zoning}` : null,
+      `- Flood Zone: ${floodZone ?? "Unknown"}${sfha ? " — SPECIAL FLOOD HAZARD AREA" : ""}`,
+      `- Wetlands on Site: ${wetlandsOnSite ? `Yes${wetlandType ? ` (${wetlandType})` : ""}` : "No"}`,
+      // Service details
+      sd?.serviceTypes?.length ? `- Services Requested: ${sd.serviceTypes.join(", ")}` : null,
+      sd?.clearingArea ? `- Area to Clear: ${sd.clearingArea}` : null,
+      sd?.vegetationType ? `- Vegetation: ${sd.vegetationType}` : null,
+      sd?.drainageIssues ? `- Drainage/Slope/Wetland Issues: Yes` : null,
+      sd?.easements ? `- Easements/ROW Present: Yes` : null,
+      sd?.existingStructures ? `- Existing Structures/Debris to Remove: Yes` : null,
+      sd?.accessRoad ? `- Access Road: ${sd.accessRoad}` : null,
+      sd?.debrisHandling ? `- Debris Handling: ${sd.debrisHandling}` : null,
+      sd?.urgency && sd.urgency !== "Flexible" ? `- Urgency: ${sd.urgency}` : null,
+      sd?.startDate ? `- Desired Start: ${sd.startDate}` : null,
+      sd?.permitsStatus ? `- Permits: ${sd.permitsStatus}` : null,
+      sd?.largerProject ? `- Part of larger build project: Yes` : null,
+      additionalNotes ? `\nCLIENT'S ADDITIONAL INSTRUCTIONS (read carefully, apply to the estimate — this may call out a custom request or a detail that overrides a general assumption above):\n${additionalNotes}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    let landClearingContent: Anthropic.MessageParam["content"];
+
+    if (isPlanArea && sd?.clearingPlanFiles?.length && aerialImageBase64) {
+      // Plans + satellite: compare both to determine clearing scope
+      const planBlocks: Anthropic.MessageParam["content"] = sd.clearingPlanFiles.map((f) =>
+        f.type === "application/pdf"
+          ? ({ type: "document", source: { type: "base64", media_type: "application/pdf", data: f.data } } as const)
+          : ({ type: "image", source: { type: "base64", media_type: f.type as "image/png" | "image/jpeg" | "image/webp", data: f.data } } as const)
+      );
+      landClearingContent = [
+        { type: "text", text: "IMAGE 1 — Aerial satellite photo of the parcel (for context and tree analysis):" },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: aerialImageBase64 } },
+        { type: "text", text: "IMAGES BELOW — Client-uploaded construction plans (use these to determine which areas need clearing and which trees/areas should remain):" },
+        ...planBlocks,
+        { type: "text", text: `Compare the satellite image against the construction plans to identify: (1) which areas must be cleared, (2) which trees/vegetation should be preserved, (3) approximate clearing boundaries. Count trees in the areas to be cleared only.\n\n${userMessage}` },
+      ];
+    } else if (aerialImageBase64) {
+      // Satellite only: tree count + density analysis
+      landClearingContent = [
+        { type: "image", source: { type: "base64", media_type: "image/png", data: aerialImageBase64 } },
+        { type: "text", text: `Aerial satellite image of the parcel is attached above. Analyze it for tree count, species, and density as instructed.\n\n${userMessage}` },
+      ];
+    } else {
+      landClearingContent = userMessage;
+    }
+
+    const stream = client.messages.stream({
+      model: "claude-opus-4-8",
+      max_tokens: 16000,
+      thinking: { type: "adaptive" },
+      system: LAND_CLEARING_PROMPT,
+      messages: [{ role: "user", content: landClearingContent }],
+      output_config: { format: zodOutputFormat(QuoteSchema) },
+    });
+    const message = await stream.finalMessage();
+
+    if (!message.parsed_output) {
+      console.error("Quote parse failure (land_clearing):", message.stop_reason, JSON.stringify(message.content).slice(0, 2000));
+      throw new QuoteGenerationError("Failed to generate quote", 500);
+    }
+    setCachedQuote(cacheKey, message.parsed_output);
+    await saveEstimateRecord({
+      quote: message.parsed_output,
+      fromCache: false,
+      serviceType,
+      county,
+      state,
+      zipCode,
+      address,
+      parcelId,
+      ownerName,
+      zoning,
+      acreage,
+      contactName,
+      contactPhone,
+      contactEmail,
+      additionalNotes,
+      trades,
+      serviceTypes: serviceDetails?.serviceTypes,
+      files: serviceDetails?.clearingPlanFiles,
+    });
+    return message.parsed_output;
+  } catch (err) {
+    if (err instanceof QuoteGenerationError) throw err;
+    console.error("Quote generation error:", err);
+    throw new QuoteGenerationError("Internal error", 500);
+  }
+}
