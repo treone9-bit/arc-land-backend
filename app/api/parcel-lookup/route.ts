@@ -28,11 +28,21 @@ type CountyConfig = {
   normalize: (attrs: Record<string, unknown>) => ParcelResult;
 };
 
+type ArcGISFeature = {
+  attributes: Record<string, unknown>;
+  geometry?: { rings?: number[][][] };
+};
+
+type ArcGISQueryResponse = {
+  features?: ArcGISFeature[];
+  error?: { code: number; message: string };
+};
+
 // The FDOR statewide cadastral layer (and some county ArcGIS services) are hosted
 // feature services that occasionally throw a transient 400 "Invalid query parameters"
 // under load on an otherwise well-formed query. Retry a couple of times with a short
 // backoff before giving up, rather than surfacing a one-shot flake to the user.
-async function fetchArcGISQuery(url: string, attempts = 3): Promise<any> {
+async function fetchArcGISQuery(url: string, attempts = 3): Promise<ArcGISQueryResponse> {
   let lastErr: Error = new Error("ArcGIS query failed");
   for (let i = 0; i < attempts; i++) {
     try {
