@@ -65,9 +65,14 @@ export default function AdminDashboard() {
       <div className={styles.container}>
         <div className={styles.header}>
           <div className={styles.title}>Saved Estimates</div>
-          <button className={styles.logoutBtn} onClick={() => signOut(clientAuth)}>
-            Sign Out
-          </button>
+          <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+            <span className={styles.backLink} onClick={() => router.push("/admin/feedback")}>
+              View Feedback →
+            </span>
+            <button className={styles.logoutBtn} onClick={() => signOut(clientAuth)}>
+              Sign Out
+            </button>
+          </div>
         </div>
 
         <div className={styles.card}>

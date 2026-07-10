@@ -8,6 +8,7 @@ import type { EnvironmentalResult } from "./api/environmental/route";
 import type { QuoteResult } from "../lib/quoteGeneration";
 import ServiceDetailsSection, { type ServiceData } from "./ServiceDetailsSection";
 import QuoteDocument from "./QuoteDocument";
+import FeedbackWidget from "./FeedbackWidget";
 import styles from "./page.module.css";
 
 type Stage = "lookup" | "loading_parcel" | "job" | "loading_quote" | "done" | "error";
@@ -87,6 +88,29 @@ export default function Home() {
   const [estMeta, setEstMeta] = useState<{ num: string; date: string } | null>(null);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [loadingPhase, setLoadingPhase] = useState<"checkout" | "generating" | null>(null);
+  const [estimateRating, setEstimateRating] = useState<"up" | "down" | null>(null);
+  const [estimateComment, setEstimateComment] = useState("");
+  const [estimateFeedbackStatus, setEstimateFeedbackStatus] = useState<"idle" | "sending" | "sent">("idle");
+
+  async function submitEstimateFeedback() {
+    if (!estimateRating || !estMeta) return;
+    setEstimateFeedbackStatus("sending");
+    try {
+      await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "estimate",
+          rating: estimateRating,
+          message: estimateComment.trim() || (estimateRating === "up" ? "Rated: helpful" : "Rated: not helpful"),
+          estimateNum: estMeta.num,
+        }),
+      });
+    } catch {
+      // Best-effort — don't block the user on a feedback submission failure
+    }
+    setEstimateFeedbackStatus("sent");
+  }
 
   // Resume after returning from Stripe Checkout (page reloads fresh, so this
   // reconstructs just enough state from the server to render the result).
@@ -395,10 +419,14 @@ export default function Home() {
     setQuote(null);
     setEstMeta(null);
     setErrorMsg("");
+    setEstimateRating(null);
+    setEstimateComment("");
+    setEstimateFeedbackStatus("idle");
   }
 
   return (
     <div className={styles.page}>
+      <FeedbackWidget />
       <header className={styles.header}>
         <img src="/arc-logo.png" alt="ARC Land Development" className={styles.headerLogo} />
       </header>
@@ -903,6 +931,52 @@ export default function Home() {
           </div>
         );
       })()}
+
+      {stage === "done" && quote && estMeta && (
+        <div className={styles.quoteFeedback}>
+          {estimateFeedbackStatus === "sent" ? (
+            <p className={styles.quoteFeedbackThanks}>Thanks for your feedback!</p>
+          ) : (
+            <>
+              <div className={styles.quoteFeedbackPrompt}>Was this estimate helpful?</div>
+              <div className={styles.quoteFeedbackButtons}>
+                <button
+                  type="button"
+                  className={estimateRating === "up" ? `${styles.quoteFeedbackBtn} ${styles.quoteFeedbackBtnActive}` : styles.quoteFeedbackBtn}
+                  onClick={() => setEstimateRating("up")}
+                >
+                  👍 Yes
+                </button>
+                <button
+                  type="button"
+                  className={estimateRating === "down" ? `${styles.quoteFeedbackBtn} ${styles.quoteFeedbackBtnActive}` : styles.quoteFeedbackBtn}
+                  onClick={() => setEstimateRating("down")}
+                >
+                  👎 No
+                </button>
+              </div>
+              {estimateRating && (
+                <>
+                  <textarea
+                    className={styles.quoteFeedbackComment}
+                    placeholder="Anything you'd like to add? (optional)"
+                    value={estimateComment}
+                    onChange={(e) => setEstimateComment(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className={styles.quoteFeedbackSubmit}
+                    onClick={submitEstimateFeedback}
+                    disabled={estimateFeedbackStatus === "sending"}
+                  >
+                    {estimateFeedbackStatus === "sending" ? "Sending…" : "Submit Feedback"}
+                  </button>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
