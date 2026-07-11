@@ -358,7 +358,7 @@ export default function Home() {
           state: geo?.state ?? stateCode,
           acreage: effectiveAcres ?? undefined,
           trades,
-          files: serviceData!.planFiles.map((f) => ({ data: f.data, type: f.type })),
+          files: serviceData!.planFiles.map((f) => ({ path: f.path, type: f.type })),
           serviceDetails: serviceData,
           ...sharedFields,
         };

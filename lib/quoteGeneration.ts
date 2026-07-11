@@ -24,13 +24,15 @@ type SaveEstimateParams = {
   additionalNotes?: string | null;
   trades?: string[] | null;
   serviceTypes?: string[] | null;
-  files?: { data: string; type: string }[] | null;
+  files?: { path: string; type: string }[] | null;
+  source: "customer" | "admin_free";
 };
 
 // Persists the estimate + any uploaded plan files for the admin dashboard.
 // Never allowed to break quote generation — failures are logged, not thrown.
-async function saveEstimateRecord(params: SaveEstimateParams): Promise<void> {
-  if (!process.env.FIREBASE_PROJECT_ID) return; // Firebase not configured — skip silently
+// Returns the saved doc's id, or null if the save itself failed/was skipped.
+async function saveEstimateRecord(params: SaveEstimateParams): Promise<string | null> {
+  if (!process.env.FIREBASE_PROJECT_ID) return null; // Firebase not configured — skip silently
   try {
     const id = randomUUID();
     const planFilePaths: string[] = [];
@@ -41,7 +43,10 @@ async function saveEstimateRecord(params: SaveEstimateParams): Promise<void> {
         const f = params.files[i];
         const ext = f.type === "application/pdf" ? "pdf" : f.type.split("/")[1] ?? "bin";
         const path = `plans/${id}/${i}.${ext}`;
-        await bucket.file(path).save(Buffer.from(f.data, "base64"), { contentType: f.type });
+        // Files already live in Storage (uploaded directly by the client) —
+        // move them into the permanent per-estimate path rather than
+        // re-uploading bytes through our server.
+        await bucket.file(f.path).move(path);
         planFilePaths.push(path);
       }
     }
@@ -68,10 +73,13 @@ async function saveEstimateRecord(params: SaveEstimateParams): Promise<void> {
         quote: params.quote,
         planFilePaths,
         fromCache: params.fromCache,
+        source: params.source,
         createdAt: new Date(),
       });
+    return id;
   } catch (err) {
     console.error("Failed to save estimate record:", err);
+    return null;
   }
 }
 
@@ -108,9 +116,16 @@ const BboxSchema = z.object({
 });
 
 const FileSchema = z.object({
-  data: z.string(),
+  path: z.string(),
   type: z.enum(["application/pdf", "image/png", "image/jpeg", "image/webp"]),
 });
+
+// Files are uploaded directly to Storage by the client (see /api/upload-url);
+// the request only carries the Storage path, so we fetch bytes here.
+async function fetchFileAsBase64(path: string): Promise<string> {
+  const [buffer] = await adminStorage().bucket().file(path).download();
+  return buffer.toString("base64");
+}
 
 export const QuoteRequestSchema = z.object({
   serviceType: z.enum(["land_clearing", "upload_plans"]),
@@ -459,9 +474,15 @@ async function fetchAerialImageBase64(bbox: { minLng: number; maxLng: number; mi
   }
 }
 
+export type GeneratedQuote = { quote: QuoteResult; estimateId: string | null };
+
 // Generates a quote from an already-validated request. Callers must gate
 // access to this (payment, auth, etc.) — it has no gate of its own.
-export async function generateQuote(rawBody: unknown): Promise<QuoteResult> {
+export async function generateQuote(
+  rawBody: unknown,
+  opts: { source?: "customer" | "admin_free" } = {}
+): Promise<GeneratedQuote> {
+  const source = opts.source ?? "customer";
   const parsed = QuoteRequestSchema.safeParse(rawBody);
   if (!parsed.success) {
     throw new QuoteGenerationError(
@@ -504,7 +525,7 @@ export async function generateQuote(rawBody: unknown): Promise<QuoteResult> {
   try {
     const cached = getCachedQuote(cacheKey);
     if (cached) {
-      await saveEstimateRecord({
+      const estimateId = await saveEstimateRecord({
         quote: cached,
         fromCache: true,
         serviceType,
@@ -523,8 +544,9 @@ export async function generateQuote(rawBody: unknown): Promise<QuoteResult> {
         trades,
         serviceTypes: serviceDetails?.serviceTypes,
         files,
+        source,
       });
-      return cached as QuoteResult;
+      return { quote: cached as QuoteResult, estimateId };
     }
 
     if (serviceType === "upload_plans") {
@@ -564,10 +586,13 @@ export async function generateQuote(rawBody: unknown): Promise<QuoteResult> {
         aerialImageBase64 = await fetchAerialImageBase64(mapBbox);
       }
 
-      const planBlocks: Anthropic.MessageParam["content"] = files.map((f) =>
-        f.type === "application/pdf"
-          ? ({ type: "document", source: { type: "base64", media_type: f.type, data: f.data } } as const)
-          : ({ type: "image", source: { type: "base64", media_type: f.type, data: f.data } } as const)
+      const planBlocks: Anthropic.MessageParam["content"] = await Promise.all(
+        files.map(async (f) => {
+          const data = await fetchFileAsBase64(f.path);
+          return f.type === "application/pdf"
+            ? ({ type: "document", source: { type: "base64", media_type: f.type, data } } as const)
+            : ({ type: "image", source: { type: "base64", media_type: f.type, data } } as const);
+        })
       );
 
       const contentBlocks: Anthropic.MessageParam["content"] = aerialImageBase64
@@ -599,7 +624,7 @@ export async function generateQuote(rawBody: unknown): Promise<QuoteResult> {
         throw new QuoteGenerationError("Failed to generate quote", 500);
       }
       setCachedQuote(cacheKey, message.parsed_output);
-      await saveEstimateRecord({
+      const estimateId = await saveEstimateRecord({
         quote: message.parsed_output,
         fromCache: false,
         serviceType,
@@ -618,8 +643,9 @@ export async function generateQuote(rawBody: unknown): Promise<QuoteResult> {
         trades,
         serviceTypes: serviceDetails?.serviceTypes,
         files,
+        source,
       });
-      return message.parsed_output;
+      return { quote: message.parsed_output, estimateId };
     }
 
     // Land clearing path
@@ -673,10 +699,13 @@ export async function generateQuote(rawBody: unknown): Promise<QuoteResult> {
 
     if (isPlanArea && sd?.clearingPlanFiles?.length && aerialImageBase64) {
       // Plans + satellite: compare both to determine clearing scope
-      const planBlocks: Anthropic.MessageParam["content"] = sd.clearingPlanFiles.map((f) =>
-        f.type === "application/pdf"
-          ? ({ type: "document", source: { type: "base64", media_type: "application/pdf", data: f.data } } as const)
-          : ({ type: "image", source: { type: "base64", media_type: f.type as "image/png" | "image/jpeg" | "image/webp", data: f.data } } as const)
+      const planBlocks: Anthropic.MessageParam["content"] = await Promise.all(
+        sd.clearingPlanFiles.map(async (f) => {
+          const data = await fetchFileAsBase64(f.path);
+          return f.type === "application/pdf"
+            ? ({ type: "document", source: { type: "base64", media_type: "application/pdf", data } } as const)
+            : ({ type: "image", source: { type: "base64", media_type: f.type as "image/png" | "image/jpeg" | "image/webp", data } } as const);
+        })
       );
       landClearingContent = [
         { type: "text", text: "IMAGE 1 — Aerial satellite photo of the parcel (for context and tree analysis):" },
@@ -710,7 +739,7 @@ export async function generateQuote(rawBody: unknown): Promise<QuoteResult> {
       throw new QuoteGenerationError("Failed to generate quote", 500);
     }
     setCachedQuote(cacheKey, message.parsed_output);
-    await saveEstimateRecord({
+    const estimateId = await saveEstimateRecord({
       quote: message.parsed_output,
       fromCache: false,
       serviceType,
@@ -729,8 +758,9 @@ export async function generateQuote(rawBody: unknown): Promise<QuoteResult> {
       trades,
       serviceTypes: serviceDetails?.serviceTypes,
       files: serviceDetails?.clearingPlanFiles,
+      source,
     });
-    return message.parsed_output;
+    return { quote: message.parsed_output, estimateId };
   } catch (err) {
     if (err instanceof QuoteGenerationError) throw err;
     console.error("Quote generation error:", err);

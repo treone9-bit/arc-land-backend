@@ -103,7 +103,7 @@ export async function GET(req: NextRequest) {
 
     let quote: QuoteResult;
     try {
-      quote = await generateQuote(requestData);
+      ({ quote } = await generateQuote(requestData, { source: "customer" }));
     } catch (err) {
       const status = err instanceof QuoteGenerationError ? err.status : 500;
       const message = err instanceof QuoteGenerationError ? err.message : "Internal error";

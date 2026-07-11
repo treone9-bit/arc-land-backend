@@ -18,6 +18,7 @@ type EstimateSummary = {
   contactEmail: string | null;
   total: number | null;
   fromCache: boolean;
+  source: "customer" | "admin_free";
 };
 
 function fmt(n: number | null) {
@@ -66,6 +67,9 @@ export default function AdminDashboard() {
         <div className={styles.header}>
           <div className={styles.title}>Saved Estimates</div>
           <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+            <button className={styles.logoutBtn} onClick={() => router.push("/admin/new-estimate")}>
+              + Free Estimate
+            </button>
             <span className={styles.backLink} onClick={() => router.push("/admin/feedback")}>
               View Feedback →
             </span>
@@ -92,6 +96,7 @@ export default function AdminDashboard() {
                   <th>Contact</th>
                   <th>Service</th>
                   <th>Total</th>
+                  <th>Source</th>
                 </tr>
               </thead>
               <tbody>
@@ -103,6 +108,13 @@ export default function AdminDashboard() {
                     <td>{e.contactName ?? "—"}</td>
                     <td>{e.serviceType === "land_clearing" ? "Land Clearing" : "Plans/Trades"}</td>
                     <td>{fmt(e.total)}</td>
+                    <td>
+                      {e.source === "admin_free" ? (
+                        <span style={{ color: "#2563eb", fontWeight: 600 }}>Free</span>
+                      ) : (
+                        <span style={{ color: "#16a34a" }}>Paid</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

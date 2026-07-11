@@ -29,6 +29,7 @@ export async function GET(req: NextRequest) {
       contactEmail: data.contactEmail ?? null,
       total: quote?.total ?? null,
       fromCache: data.fromCache ?? false,
+      source: data.source ?? "customer",
     };
   });
 

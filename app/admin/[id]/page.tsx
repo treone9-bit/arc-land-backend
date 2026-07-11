@@ -51,6 +51,7 @@ type EstimateDetail = {
   fromCache: boolean;
   quote: QuoteResult | null;
   planFileUrls: { path: string; url: string }[];
+  source: "customer" | "admin_free";
 };
 
 function fmt(n: number) {
@@ -115,6 +116,16 @@ export default function EstimateDetailPage() {
                 <span className={styles.detailLabel}>Service Type</span>
                 <span className={styles.detailValue}>
                   {estimate.serviceType === "land_clearing" ? "Land Clearing" : "Plans/Trades"}
+                </span>
+              </div>
+              <div>
+                <span className={styles.detailLabel}>Source</span>
+                <span className={styles.detailValue}>
+                  {estimate.source === "admin_free" ? (
+                    <span style={{ color: "#2563eb", fontWeight: 600 }}>Free (Admin-created)</span>
+                  ) : (
+                    <span style={{ color: "#16a34a" }}>Paid ($6.99)</span>
+                  )}
                 </span>
               </div>
               <div>

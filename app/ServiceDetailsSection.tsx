@@ -48,7 +48,7 @@ function lngLatToSqFt(lngLat: [number, number][], midLat: number): number {
   return shoelaceArea(lngLat) * latM * lngM * 10.7639;
 }
 
-export type PlanFile = { data: string; type: string; name: string };
+export type PlanFile = { path: string; type: string; name: string };
 
 export type ServiceData = {
   serviceTypes: string[];
@@ -68,16 +68,26 @@ export type ServiceData = {
   customClearingPolygon?: { lngLat: [number, number][]; sqFt: number };
 };
 
-function readFileAsBase64(file: File): Promise<PlanFile> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const base64 = (ev.target?.result as string).split(",")[1];
-      resolve({ data: base64, type: file.type, name: file.name });
-    };
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
+// Uploads go straight from the browser to Storage via a signed URL — Vercel
+// caps API request bodies at 4.5MB, which a single base64-encoded plan file
+// can exceed on its own, so the file bytes never pass through our own API.
+async function uploadFile(file: File): Promise<PlanFile> {
+  const urlRes = await fetch("/api/upload-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename: file.name, contentType: file.type }),
   });
+  if (!urlRes.ok) throw new Error(`Failed to prepare upload for "${file.name}"`);
+  const { url, path } = await urlRes.json();
+
+  const putRes = await fetch(url, {
+    method: "PUT",
+    headers: { "Content-Type": file.type },
+    body: file,
+  });
+  if (!putRes.ok) throw new Error(`Failed to upload "${file.name}"`);
+
+  return { path, type: file.type, name: file.name };
 }
 
 type Props = {
@@ -105,6 +115,7 @@ export default function ServiceDetailsSection({ onChange, mapBbox, parcelRings }
   });
 
   const [planFileError, setPlanFileError] = useState("");
+  const [uploading, setUploading] = useState(false);
   const [drawPoints, setDrawPoints] = useState<[number, number][]>([]);
   const [drawClosed, setDrawClosed] = useState(false);
 
@@ -152,7 +163,7 @@ export default function ServiceDetailsSection({ onChange, mapBbox, parcelRings }
     emit({ ...data, serviceTypes: nextTypes });
   }
 
-  function handlePlanFile(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handlePlanFile(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
     e.target.value = "";
     if (files.length === 0) return;
@@ -163,16 +174,22 @@ export default function ServiceDetailsSection({ onChange, mapBbox, parcelRings }
       return;
     }
     setPlanFileError("");
-    Promise.all(files.map(readFileAsBase64)).then((newFiles) => {
+    setUploading(true);
+    try {
+      const newFiles = await Promise.all(files.map(uploadFile));
       emit({ ...data, planFiles: [...data.planFiles, ...newFiles] });
-    });
+    } catch (err) {
+      setPlanFileError(err instanceof Error ? err.message : "Upload failed. Please try again.");
+    } finally {
+      setUploading(false);
+    }
   }
 
   function removePlanFile(index: number) {
     emit({ ...data, planFiles: data.planFiles.filter((_, i) => i !== index) });
   }
 
-  function handleClearingPlanFile(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleClearingPlanFile(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
     e.target.value = "";
     if (files.length === 0) return;
@@ -183,9 +200,15 @@ export default function ServiceDetailsSection({ onChange, mapBbox, parcelRings }
       return;
     }
     setPlanFileError("");
-    Promise.all(files.map(readFileAsBase64)).then((newFiles) => {
+    setUploading(true);
+    try {
+      const newFiles = await Promise.all(files.map(uploadFile));
       emit({ ...data, clearingPlanFiles: [...data.clearingPlanFiles, ...newFiles] });
-    });
+    } catch (err) {
+      setPlanFileError(err instanceof Error ? err.message : "Upload failed. Please try again.");
+    } finally {
+      setUploading(false);
+    }
   }
 
   function removeClearingPlanFile(index: number) {
@@ -293,8 +316,9 @@ export default function ServiceDetailsSection({ onChange, mapBbox, parcelRings }
                 multiple
                 onChange={handleClearingPlanFile}
                 className={styles.fileInput}
+                disabled={uploading}
               />
-              <span className={styles.fileBtn}>Choose Files</span>
+              <span className={styles.fileBtn}>{uploading ? "Uploading…" : "Choose Files"}</span>
               <span className={styles.fileName}>
                 {data.clearingPlanFiles.length > 0
                   ? `${data.clearingPlanFiles.length} file(s) selected`
@@ -480,8 +504,9 @@ export default function ServiceDetailsSection({ onChange, mapBbox, parcelRings }
               multiple
               onChange={handlePlanFile}
               className={styles.fileInput}
+              disabled={uploading}
             />
-            <span className={styles.fileBtn}>Choose Files</span>
+            <span className={styles.fileBtn}>{uploading ? "Uploading…" : "Choose Files"}</span>
             <span className={styles.fileName}>
               {data.planFiles.length > 0 ? `${data.planFiles.length} file(s) selected` : "No file chosen"}
             </span>

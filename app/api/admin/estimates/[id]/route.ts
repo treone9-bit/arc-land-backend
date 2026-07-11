@@ -48,5 +48,6 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     fromCache: data.fromCache ?? false,
     quote: data.quote ?? null,
     planFileUrls,
+    source: data.source ?? "customer",
   });
 }
