@@ -296,6 +296,8 @@ export default function Home() {
 
     const selectedServices = serviceData?.serviceTypes ?? [];
     const hasPlans = (serviceData?.planFiles.length ?? 0) > 0;
+    const hasScopeOfWork = (serviceData?.scopeOfWork?.trim().length ?? 0) > 0;
+    const hasPlansOrScope = hasPlans || hasScopeOfWork;
     const hasClearingService = selectedServices.some(
       (s) => s === "Partial Land / Underbrush Clearing" || s === "Complete Land Clearing"
     );
@@ -308,8 +310,8 @@ export default function Home() {
       return;
     }
 
-    if (hasNonClearing && !hasPlans) {
-      setErrorMsg("Please upload construction plans for the selected services.");
+    if (hasNonClearing && !hasPlansOrScope) {
+      setErrorMsg("Please upload construction plans or describe the scope of work for the selected services.");
       return;
     }
 
@@ -319,7 +321,7 @@ export default function Home() {
     const parcelAcres = acreage ? parseFloat(acreage) : null;
     const effectiveAcres = customAcres ?? parcelAcres;
 
-    if (!hasPlans && !effectiveAcres) {
+    if (!hasPlansOrScope && !effectiveAcres) {
       setErrorMsg("Acreage is required. Draw a clearing area on the map or look up a parcel with acreage data.");
       return;
     }
@@ -350,7 +352,7 @@ export default function Home() {
         ...contactInfo,
       };
 
-      if (hasPlans) {
+      if (hasPlansOrScope) {
         const trades = selectedServices.length > 0 ? selectedServices : ["General Site Work"];
         body = {
           serviceType: "upload_plans",

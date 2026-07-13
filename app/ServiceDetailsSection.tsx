@@ -65,6 +65,7 @@ export type ServiceData = {
   largerProject: boolean;
   planFiles: PlanFile[];
   clearingPlanFiles: PlanFile[];
+  scopeOfWork: string;
   customClearingPolygon?: { lngLat: [number, number][]; sqFt: number };
 };
 
@@ -112,6 +113,7 @@ export default function ServiceDetailsSection({ onChange, mapBbox, parcelRings }
     largerProject: false,
     planFiles: [],
     clearingPlanFiles: [],
+    scopeOfWork: "",
   });
 
   const [planFileError, setPlanFileError] = useState("");
@@ -491,11 +493,7 @@ export default function ServiceDetailsSection({ onChange, mapBbox, parcelRings }
         <div className={styles.field}>
           <label>
             Construction Plans{" "}
-            <span className={styles.hint}>
-              {hasNonClearing
-                ? "(PDF or image, max 4MB each — required for selected services, multiple allowed)"
-                : "(PDF or image, max 4MB each — optional, multiple allowed)"}
-            </span>
+            <span className={styles.hint}>(PDF or image, max 4MB each — optional, multiple allowed)</span>
           </label>
           <label className={styles.fileLabel}>
             <input
@@ -534,6 +532,25 @@ export default function ServiceDetailsSection({ onChange, mapBbox, parcelRings }
             </p>
           )}
         </div>
+
+        {hasNonClearing && (
+          <div className={styles.field}>
+            <label>
+              Scope of Work{" "}
+              <span className={styles.hint}>
+                {data.planFiles.length > 0
+                  ? "(optional — add detail beyond what's on the plans)"
+                  : "(required if no plans uploaded)"}
+              </span>
+            </label>
+            <textarea
+              placeholder="Please provide details of the scope of work needed — what's being built, dimensions, materials, quantities, or anything else that would help us price the job accurately."
+              rows={5}
+              value={data.scopeOfWork}
+              onChange={(e) => update("scopeOfWork", e.target.value)}
+            />
+          </div>
+        )}
       </div>
 
       <div className={styles.svcSection}>

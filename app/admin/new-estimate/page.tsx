@@ -154,6 +154,8 @@ export default function AdminNewEstimatePage() {
 
     const selectedServices = serviceData?.serviceTypes ?? [];
     const hasPlans = (serviceData?.planFiles.length ?? 0) > 0;
+    const hasScopeOfWork = (serviceData?.scopeOfWork?.trim().length ?? 0) > 0;
+    const hasPlansOrScope = hasPlans || hasScopeOfWork;
     const hasNonClearing = selectedServices.some(
       (s) => s !== "Partial Land / Underbrush Clearing" && s !== "Complete Land Clearing"
     );
@@ -162,11 +164,11 @@ export default function AdminNewEstimatePage() {
     const parcelAcres = acreage ? parseFloat(acreage) : null;
     const effectiveAcres = customAcres ?? parcelAcres;
 
-    if (hasNonClearing && !hasPlans) {
-      setErrorMsg("Please upload construction plans for the selected services.");
+    if (hasNonClearing && !hasPlansOrScope) {
+      setErrorMsg("Please upload construction plans or describe the scope of work for the selected services.");
       return;
     }
-    if (!hasPlans && !effectiveAcres) {
+    if (!hasPlansOrScope && !effectiveAcres) {
       setErrorMsg("Acreage is required. Draw a clearing area on the map or look up a parcel with acreage data.");
       return;
     }
@@ -190,7 +192,7 @@ export default function AdminNewEstimatePage() {
       };
 
       let body: Record<string, unknown>;
-      if (hasPlans) {
+      if (hasPlansOrScope) {
         const trades = selectedServices.length > 0 ? selectedServices : ["General Site Work"];
         body = {
           serviceType: "upload_plans",

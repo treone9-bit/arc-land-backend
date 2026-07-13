@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { stripeClient } from "../../../../lib/stripe";
-import { generateQuote, QuoteGenerationError, type QuoteResult } from "../../../../lib/quoteGeneration";
+import { generateQuote, QuoteGenerationError, type QuoteResult, type EstMeta } from "../../../../lib/quoteGeneration";
 import { adminDb, adminStorage } from "../../../../lib/firebaseAdmin";
 
 // This route runs the full Claude generation (30-90+ seconds for complex jobs,
@@ -8,8 +8,6 @@ import { adminDb, adminStorage } from "../../../../lib/firebaseAdmin";
 // timeout would kill it almost every time. 60s is the max allowed on the Hobby
 // plan; upgrade to Pro (300s max) if the most complex plan takeoffs still time out.
 export const maxDuration = 60;
-
-type EstMeta = { num: string; date: string };
 
 type Bbox = { minLng: number; maxLng: number; minLat: number; maxLat: number };
 
@@ -50,14 +48,6 @@ function fromFirestoreRequest(stored: Record<string, unknown>): RequestSummary {
   return {
     ...(stored as unknown as RequestSummary),
     parcelRings: typeof parcelRingsRaw === "string" ? JSON.parse(parcelRingsRaw) : null,
-  };
-}
-
-function makeEstMeta(): EstMeta {
-  const now = new Date();
-  return {
-    num: `ARC-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(Math.floor(Math.random() * 900) + 100)}`,
-    date: now.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }),
   };
 }
 
@@ -102,15 +92,15 @@ export async function GET(req: NextRequest) {
     const requestData = JSON.parse(contents.toString("utf8")) as Record<string, unknown>;
 
     let quote: QuoteResult;
+    let estMeta: EstMeta;
     try {
-      ({ quote } = await generateQuote(requestData, { source: "customer" }));
+      ({ quote, estMeta } = await generateQuote(requestData, { source: "customer" }));
     } catch (err) {
       const status = err instanceof QuoteGenerationError ? err.status : 500;
       const message = err instanceof QuoteGenerationError ? err.message : "Internal error";
       return NextResponse.json({ error: message }, { status });
     }
 
-    const estMeta = makeEstMeta();
     const request = summarize(requestData);
 
     await consumedRef.set({

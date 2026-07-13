@@ -3,8 +3,12 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { onAuthStateChanged, type User } from "firebase/auth";
+import { pdf } from "@react-pdf/renderer";
 import { clientAuth } from "../../../lib/firebaseClient";
+import QuoteDocument from "../../QuoteDocument";
 import styles from "../admin.module.css";
+
+type Bbox = { minLng: number; maxLng: number; minLat: number; maxLat: number };
 
 type MaterialLineItem = {
   description: string;
@@ -52,6 +56,10 @@ type EstimateDetail = {
   quote: QuoteResult | null;
   planFileUrls: { path: string; url: string }[];
   source: "customer" | "admin_free";
+  estNum: string | null;
+  estDate: string | null;
+  mapBbox: Bbox | null;
+  parcelRings: number[][][] | null;
 };
 
 function fmt(n: number) {
@@ -70,6 +78,7 @@ export default function EstimateDetailPage() {
   const [checking, setChecking] = useState(true);
   const [estimate, setEstimate] = useState<EstimateDetail | null>(null);
   const [error, setError] = useState("");
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(clientAuth, (u) => {
@@ -92,14 +101,59 @@ export default function EstimateDetailPage() {
       .catch((err) => setError(err instanceof Error ? err.message : "Unknown error"));
   }, [user, params.id]);
 
+  async function downloadPdf() {
+    if (!estimate?.quote) return;
+    setDownloadingPdf(true);
+    try {
+      const countyLine = estimate.county ? `${estimate.county}, ${estimate.state ?? ""}`.trim() : "";
+      const blob = await pdf(
+        <QuoteDocument
+          quote={estimate.quote}
+          estNum={estimate.estNum ?? estimate.id}
+          estDate={estimate.estDate ?? (estimate.createdAt ? new Date(estimate.createdAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "")}
+          contactName={estimate.contactName ?? ""}
+          contactPhone={estimate.contactPhone ?? ""}
+          contactEmail={estimate.contactEmail ?? ""}
+          addressLine={estimate.address ?? (estimate.parcelId ? `Parcel ${estimate.parcelId}` : "")}
+          countyLine={countyLine}
+          logoUrl={`${window.location.origin}/arc-logo.png`}
+          mapImageUrl={
+            estimate.mapBbox
+              ? `${window.location.origin}/api/map-image?minLng=${estimate.mapBbox.minLng}&maxLng=${estimate.mapBbox.maxLng}&minLat=${estimate.mapBbox.minLat}&maxLat=${estimate.mapBbox.maxLat}`
+              : undefined
+          }
+          mapBbox={estimate.mapBbox ?? undefined}
+          parcelRings={estimate.parcelRings ?? undefined}
+        />
+      ).toBlob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Estimate-${estimate.estNum ?? estimate.id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } finally {
+      setDownloadingPdf(false);
+    }
+  }
+
   if (checking || !user) return null;
 
   return (
     <div className={styles.page}>
       <div className={styles.container}>
-        <span className={styles.backLink} onClick={() => router.push("/admin")}>
-          ← Back to Estimates
-        </span>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span className={styles.backLink} onClick={() => router.push("/admin")}>
+            ← Back to Estimates
+          </span>
+          {estimate?.quote && (
+            <button className={styles.logoutBtn} onClick={downloadPdf} disabled={downloadingPdf}>
+              {downloadingPdf ? "Generating…" : "Download PDF"}
+            </button>
+          )}
+        </div>
 
         {error && <div className={styles.card}><div className={styles.empty}>{error}</div></div>}
 

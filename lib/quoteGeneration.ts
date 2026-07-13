@@ -6,6 +6,8 @@ import { adminDb, adminStorage } from "./firebaseAdmin";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+type Bbox = { minLng: number; maxLng: number; minLat: number; maxLat: number };
+
 type SaveEstimateParams = {
   quote: unknown;
   fromCache: boolean;
@@ -25,13 +27,27 @@ type SaveEstimateParams = {
   trades?: string[] | null;
   serviceTypes?: string[] | null;
   files?: { path: string; type: string }[] | null;
+  mapBbox?: Bbox | null;
+  parcelRings?: number[][][] | null;
   source: "customer" | "admin_free";
+  estMeta: EstMeta;
 };
+
+export type EstMeta = { num: string; date: string };
+
+function makeEstMeta(): EstMeta {
+  const now = new Date();
+  return {
+    num: `ARC-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(Math.floor(Math.random() * 900) + 100)}`,
+    date: now.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }),
+  };
+}
 
 // Persists the estimate + any uploaded plan files for the admin dashboard.
 // Never allowed to break quote generation — failures are logged, not thrown.
-// Returns the saved doc's id, or null if the save itself failed/was skipped.
-async function saveEstimateRecord(params: SaveEstimateParams): Promise<string | null> {
+// Returns the saved doc's id + display metadata, or null if the save itself
+// failed/was skipped.
+async function saveEstimateRecord(params: SaveEstimateParams): Promise<{ id: string } | null> {
   if (!process.env.FIREBASE_PROJECT_ID) return null; // Firebase not configured — skip silently
   try {
     const id = randomUUID();
@@ -74,9 +90,14 @@ async function saveEstimateRecord(params: SaveEstimateParams): Promise<string | 
         planFilePaths,
         fromCache: params.fromCache,
         source: params.source,
+        estNum: params.estMeta.num,
+        estDate: params.estMeta.date,
+        mapBbox: params.mapBbox ?? null,
+        // Firestore rejects arrays nested directly inside arrays.
+        parcelRings: params.parcelRings ? JSON.stringify(params.parcelRings) : null,
         createdAt: new Date(),
       });
-    return id;
+    return { id };
   } catch (err) {
     console.error("Failed to save estimate record:", err);
     return null;
@@ -172,6 +193,9 @@ export const QuoteRequestSchema = z.object({
       sqFt: z.number(),
     }).optional(),
     clearingPlanFiles: z.array(FileSchema).optional(),
+    // Written description of the work needed — required in place of plan
+    // files when no plans are uploaded (upload_plans path).
+    scopeOfWork: z.string().optional(),
   }).nullish(),
 });
 
@@ -474,7 +498,7 @@ async function fetchAerialImageBase64(bbox: { minLng: number; maxLng: number; mi
   }
 }
 
-export type GeneratedQuote = { quote: QuoteResult; estimateId: string | null };
+export type GeneratedQuote = { quote: QuoteResult; estimateId: string | null; estMeta: EstMeta };
 
 // Generates a quote from an already-validated request. Callers must gate
 // access to this (payment, auth, etc.) — it has no gate of its own.
@@ -506,6 +530,7 @@ export async function generateQuote(
     zipCode,
     address,
     mapBbox,
+    parcelRings,
     parcelId,
     ownerName,
     zoning,
@@ -522,10 +547,12 @@ export async function generateQuote(
     serviceDetails,
   } = parsed.data;
 
+  const estMeta = makeEstMeta();
+
   try {
     const cached = getCachedQuote(cacheKey);
     if (cached) {
-      const estimateId = await saveEstimateRecord({
+      const saved = await saveEstimateRecord({
         quote: cached,
         fromCache: true,
         serviceType,
@@ -544,15 +571,19 @@ export async function generateQuote(
         trades,
         serviceTypes: serviceDetails?.serviceTypes,
         files,
+        mapBbox,
+        parcelRings,
         source,
+        estMeta,
       });
-      return { quote: cached as QuoteResult, estimateId };
+      return { quote: cached as QuoteResult, estimateId: saved?.id ?? null, estMeta };
     }
 
     if (serviceType === "upload_plans") {
-      if (!files?.length || !trades?.length) {
+      const scopeOfWork = serviceDetails?.scopeOfWork?.trim();
+      if ((!files?.length && !scopeOfWork) || !trades?.length) {
         throw new QuoteGenerationError(
-          "upload_plans requires at least one file and at least one trade",
+          "upload_plans requires at least one file or a written scope of work, and at least one trade",
           400
         );
       }
@@ -570,7 +601,10 @@ export async function generateQuote(
         sd?.urgency && sd.urgency !== "Flexible" ? `Urgency: ${sd.urgency}` : null,
         sd?.startDate ? `Desired start: ${sd.startDate}` : null,
         sd?.permitsStatus ? `Permits: ${sd.permitsStatus}` : null,
-        "The construction plans are attached. Read the plans and extract quantities for each service listed.",
+        files?.length
+          ? "The construction plans are attached. Read the plans and extract quantities for each service listed."
+          : "No construction plans were uploaded for this job. Base the takeoff entirely on the client's written scope of work below — estimate quantities from the description as best as reasonably possible, and note in assumptions wherever a quantity had to be inferred rather than measured.",
+        scopeOfWork ? `\nCLIENT'S SCOPE OF WORK (primary description of the work needed — read carefully):\n${scopeOfWork}` : null,
         additionalNotes ? `\nCLIENT'S ADDITIONAL INSTRUCTIONS (read carefully, apply to the estimate — this may call out a custom request, a scope change, or a detail on the plans that overrides a general assumption above):\n${additionalNotes}` : null,
       ]
         .filter(Boolean)
@@ -586,14 +620,16 @@ export async function generateQuote(
         aerialImageBase64 = await fetchAerialImageBase64(mapBbox);
       }
 
-      const planBlocks: Anthropic.MessageParam["content"] = await Promise.all(
-        files.map(async (f) => {
-          const data = await fetchFileAsBase64(f.path);
-          return f.type === "application/pdf"
-            ? ({ type: "document", source: { type: "base64", media_type: f.type, data } } as const)
-            : ({ type: "image", source: { type: "base64", media_type: f.type, data } } as const);
-        })
-      );
+      const planBlocks: Anthropic.MessageParam["content"] = files?.length
+        ? await Promise.all(
+            files.map(async (f) => {
+              const data = await fetchFileAsBase64(f.path);
+              return f.type === "application/pdf"
+                ? ({ type: "document", source: { type: "base64", media_type: f.type, data } } as const)
+                : ({ type: "image", source: { type: "base64", media_type: f.type, data } } as const);
+            })
+          )
+        : [];
 
       const contentBlocks: Anthropic.MessageParam["content"] = aerialImageBase64
         ? [
@@ -624,7 +660,7 @@ export async function generateQuote(
         throw new QuoteGenerationError("Failed to generate quote", 500);
       }
       setCachedQuote(cacheKey, message.parsed_output);
-      const estimateId = await saveEstimateRecord({
+      const saved = await saveEstimateRecord({
         quote: message.parsed_output,
         fromCache: false,
         serviceType,
@@ -643,9 +679,12 @@ export async function generateQuote(
         trades,
         serviceTypes: serviceDetails?.serviceTypes,
         files,
+        mapBbox,
+        parcelRings,
         source,
+        estMeta,
       });
-      return { quote: message.parsed_output, estimateId };
+      return { quote: message.parsed_output, estimateId: saved?.id ?? null, estMeta };
     }
 
     // Land clearing path
@@ -739,7 +778,7 @@ export async function generateQuote(
       throw new QuoteGenerationError("Failed to generate quote", 500);
     }
     setCachedQuote(cacheKey, message.parsed_output);
-    const estimateId = await saveEstimateRecord({
+    const saved = await saveEstimateRecord({
       quote: message.parsed_output,
       fromCache: false,
       serviceType,
@@ -758,9 +797,12 @@ export async function generateQuote(
       trades,
       serviceTypes: serviceDetails?.serviceTypes,
       files: serviceDetails?.clearingPlanFiles,
+      mapBbox,
+      parcelRings,
       source,
+      estMeta,
     });
-    return { quote: message.parsed_output, estimateId };
+    return { quote: message.parsed_output, estimateId: saved?.id ?? null, estMeta };
   } catch (err) {
     if (err instanceof QuoteGenerationError) throw err;
     console.error("Quote generation error:", err);

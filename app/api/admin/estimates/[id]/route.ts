@@ -49,5 +49,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     quote: data.quote ?? null,
     planFileUrls,
     source: data.source ?? "customer",
+    estNum: data.estNum ?? null,
+    estDate: data.estDate ?? null,
+    mapBbox: data.mapBbox ?? null,
+    parcelRings: typeof data.parcelRings === "string" ? JSON.parse(data.parcelRings) : null,
   });
 }
