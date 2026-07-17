@@ -352,7 +352,7 @@ export default function EstimateDetailPage() {
                 {estimate.quote.assumptions.length > 0 && (
                   <div className={styles.section}>
                     <div className={styles.sectionTitle}>Assumptions</div>
-                    <ul>
+                    <ul className={styles.detailValue} style={{ paddingLeft: "1.2rem" }}>
                       {estimate.quote.assumptions.map((a, i) => <li key={i}>{a}</li>)}
                     </ul>
                   </div>
@@ -361,7 +361,7 @@ export default function EstimateDetailPage() {
                 {estimate.quote.warnings.length > 0 && (
                   <div className={styles.section}>
                     <div className={styles.sectionTitle}>Warnings</div>
-                    <ul>
+                    <ul className={styles.detailValue} style={{ paddingLeft: "1.2rem" }}>
                       {estimate.quote.warnings.map((w, i) => <li key={i}>{w}</li>)}
                     </ul>
                   </div>

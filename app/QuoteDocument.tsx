@@ -98,6 +98,9 @@ const styles = StyleSheet.create({
     marginHorizontal: 24,
     marginBottom: 12,
   },
+  tableHeaderWrap: {
+    marginHorizontal: 24,
+  },
   tr: {
     flexDirection: "row",
     borderBottomWidth: 0.5,
@@ -363,7 +366,7 @@ export default function QuoteDocument({
         </View>
 
         {mapImageUrl && mapBbox && (
-          <>
+          <View wrap={false}>
             <Text style={styles.scopeBar}>SITE MAP</Text>
             <View style={styles.mapWrap}>
               <View style={styles.mapContainer}>
@@ -390,14 +393,14 @@ export default function QuoteDocument({
                 })()}
               </View>
             </View>
-          </>
+          </View>
         )}
 
         <Text style={styles.scopeBar}>SCOPE OF WORK</Text>
         <Text style={styles.scopeText}>{quote.summary}</Text>
 
         {quote.treeInventory && (
-          <>
+          <View wrap={false}>
             <Text style={styles.scopeBar}>TREE INVENTORY (AI AERIAL ANALYSIS)</Text>
             <View style={styles.treeBox}>
               <View style={styles.treeGrid}>
@@ -422,14 +425,14 @@ export default function QuoteDocument({
                 Tree count estimated from satellite imagery. Field verification recommended before final contract.
               </Text>
             </View>
-          </>
+          </View>
         )}
 
         {quote.materialLineItems.length > 0 && (
           <>
-            <Text style={styles.scopeBar}>MATERIALS</Text>
-            <View style={styles.table}>
-              <View style={styles.tr}>
+            <View wrap={false}>
+              <Text style={styles.scopeBar}>MATERIALS</Text>
+              <View style={[styles.tableHeaderWrap, styles.tr]}>
                 <Text style={styles.thDesc}>DESCRIPTION</Text>
                 <Text style={styles.thPart}>PART #</Text>
                 <Text style={styles.th}>UNIT</Text>
@@ -437,8 +440,10 @@ export default function QuoteDocument({
                 <Text style={styles.th}>RATE</Text>
                 <Text style={styles.th}>AMOUNT</Text>
               </View>
+            </View>
+            <View style={styles.table}>
               {quote.materialLineItems.map((item, i) => (
-                <View style={i % 2 === 1 ? [styles.tr, styles.trAlt] : styles.tr} key={i}>
+                <View style={i % 2 === 1 ? [styles.tr, styles.trAlt] : styles.tr} key={i} wrap={false}>
                   <Text style={styles.tdDesc}>{item.description}</Text>
                   <Text style={styles.tdPart}>{item.partNumber ?? "—"}</Text>
                   <Text style={styles.td}>{item.unit}</Text>
@@ -447,7 +452,7 @@ export default function QuoteDocument({
                   <Text style={styles.tdAmt}>{fmt(item.total)}</Text>
                 </View>
               ))}
-              <View style={styles.tableSubtotalRow}>
+              <View style={styles.tableSubtotalRow} wrap={false}>
                 <Text style={styles.tableSubtotalLabel}>Materials Subtotal</Text>
                 <Text style={styles.tableSubtotalAmt}>
                   {fmt(quote.materialLineItems.reduce((sum, item) => sum + item.total, 0))}
@@ -459,19 +464,21 @@ export default function QuoteDocument({
 
         {quote.laborLineItems.length > 0 && (
           <>
-            <Text style={styles.scopeBar}>LABOR</Text>
-            <View style={styles.table}>
-              <View style={styles.tr}>
+            <View wrap={false}>
+              <Text style={styles.scopeBar}>LABOR</Text>
+              <View style={[styles.tableHeaderWrap, styles.tr]}>
                 <Text style={styles.thDesc}>DESCRIPTION</Text>
                 <Text style={styles.th}>AMOUNT</Text>
               </View>
+            </View>
+            <View style={styles.table}>
               {quote.laborLineItems.map((item, i) => (
-                <View style={i % 2 === 1 ? [styles.tr, styles.trAlt] : styles.tr} key={i}>
+                <View style={i % 2 === 1 ? [styles.tr, styles.trAlt] : styles.tr} key={i} wrap={false}>
                   <Text style={styles.tdDesc}>{item.description}</Text>
                   <Text style={styles.tdAmt}>{fmt(item.total)}</Text>
                 </View>
               ))}
-              <View style={styles.tableSubtotalRow}>
+              <View style={styles.tableSubtotalRow} wrap={false}>
                 <Text style={styles.tableSubtotalLabel}>Labor Subtotal</Text>
                 <Text style={styles.tableSubtotalAmt}>
                   {fmt(quote.laborLineItems.reduce((sum, item) => sum + item.total, 0))}
@@ -481,7 +488,7 @@ export default function QuoteDocument({
           </>
         )}
 
-        <View style={styles.totalsBlock}>
+        <View style={styles.totalsBlock} wrap={false}>
           <View style={styles.totalLine}>
             <Text>Subtotal</Text>
             <Text>{fmt(quote.subtotal)}</Text>
