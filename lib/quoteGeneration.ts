@@ -809,3 +809,70 @@ export async function generateQuote(
     throw new QuoteGenerationError("Internal error", 500);
   }
 }
+
+export type ReviseQuoteParams = {
+  currentQuote: QuoteResult;
+  instructions: string;
+  serviceType: "land_clearing" | "upload_plans";
+  trades?: string[] | null;
+  serviceTypes?: string[] | null;
+  county: string;
+  state: string;
+  zipCode?: string | null;
+};
+
+// Applies an admin's plain-English correction to an already-generated quote
+// (e.g. "stump count should be 15 not 25, adjust that line and the total")
+// without re-running the full takeoff from scratch. No caching — every
+// correction is a fresh, deliberate edit.
+export async function reviseQuote(params: ReviseQuoteParams): Promise<QuoteResult> {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new QuoteGenerationError("Server misconfiguration", 500);
+  }
+  if (!params.instructions.trim()) {
+    throw new QuoteGenerationError("Correction instructions are required", 400);
+  }
+
+  const trades = params.trades ?? params.serviceTypes ?? [];
+  const includesClearing =
+    params.serviceType === "land_clearing" ||
+    trades.some((t) => t === "Complete Land Clearing" || t === "Partial Land / Underbrush Clearing");
+  const includesPlans = params.serviceType === "upload_plans";
+  const system = [includesPlans ? PLANS_PROMPT : null, includesClearing ? LAND_CLEARING_PROMPT : null]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const userMessage = [
+    `County: ${params.county}, ${params.state}${params.zipCode ? ` (${params.zipCode})` : ""}`,
+    "Here is the current estimate as JSON:",
+    JSON.stringify(params.currentQuote),
+    "",
+    "An admin has reviewed this estimate and requested the following correction(s). Apply them precisely, recompute subtotal/total and any other dependent fields, and keep everything else unchanged unless the correction requires it. Follow the same pricing rules and catalogs as the original estimate.",
+    "ADMIN CORRECTION:",
+    params.instructions.trim(),
+    "",
+    "Return the complete corrected estimate.",
+  ].join("\n");
+
+  try {
+    const stream = client.messages.stream({
+      model: "claude-opus-4-8",
+      max_tokens: 28000,
+      thinking: { type: "adaptive" },
+      system,
+      messages: [{ role: "user", content: userMessage }],
+      output_config: { format: zodOutputFormat(QuoteSchema) },
+    });
+    const message = await stream.finalMessage();
+
+    if (!message.parsed_output) {
+      console.error("Quote revision parse failure:", message.stop_reason, JSON.stringify(message.content).slice(0, 2000));
+      throw new QuoteGenerationError("Failed to apply correction", 500);
+    }
+    return message.parsed_output;
+  } catch (err) {
+    if (err instanceof QuoteGenerationError) throw err;
+    console.error("Quote revision error:", err);
+    throw new QuoteGenerationError("Internal error", 500);
+  }
+}

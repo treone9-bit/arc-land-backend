@@ -79,6 +79,10 @@ export default function EstimateDetailPage() {
   const [estimate, setEstimate] = useState<EstimateDetail | null>(null);
   const [error, setError] = useState("");
   const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const [correctionText, setCorrectionText] = useState("");
+  const [applyingCorrection, setApplyingCorrection] = useState(false);
+  const [correctionError, setCorrectionError] = useState("");
+  const [correctionSuccess, setCorrectionSuccess] = useState(false);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(clientAuth, (u) => {
@@ -136,6 +140,35 @@ export default function EstimateDetailPage() {
       URL.revokeObjectURL(url);
     } finally {
       setDownloadingPdf(false);
+    }
+  }
+
+  async function applyCorrection() {
+    if (!estimate || !correctionText.trim() || !user) return;
+    setApplyingCorrection(true);
+    setCorrectionError("");
+    setCorrectionSuccess(false);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch(`/api/admin/estimates/${estimate.id}/revise`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ instructions: correctionText.trim() }),
+      });
+      let data: { quote?: QuoteResult; error?: string };
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error(`Request failed (${res.status}). Please try again in a moment.`);
+      }
+      if (!res.ok || !data.quote) throw new Error(data.error ?? "Failed to apply correction");
+      setEstimate({ ...estimate, quote: data.quote });
+      setCorrectionText("");
+      setCorrectionSuccess(true);
+    } catch (err) {
+      setCorrectionError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setApplyingCorrection(false);
     }
   }
 
@@ -333,6 +366,48 @@ export default function EstimateDetailPage() {
                     </ul>
                   </div>
                 )}
+
+                <div className={styles.section} style={{ borderTop: "1px solid #e5e7eb", paddingTop: "1.1rem" }}>
+                  <div className={styles.sectionTitle}>Request a Correction</div>
+                  <p className={styles.detailValue} style={{ marginBottom: 8 }}>
+                    If a calculation, quantity, or price is off, describe the fix below — Claude will apply it and
+                    recompute the totals. This updates the estimate shown above; download the PDF again afterward.
+                  </p>
+                  <textarea
+                    placeholder='e.g. "Stump count should be 15, not 25 — adjust that line and the total" or "Tree removal pricing is too high, use the low end of the range"'
+                    rows={4}
+                    value={correctionText}
+                    onChange={(e) => setCorrectionText(e.target.value)}
+                    disabled={applyingCorrection}
+                    style={{
+                      width: "100%",
+                      border: "1px solid #d1d5db",
+                      borderRadius: 8,
+                      padding: "0.55rem 0.75rem",
+                      fontSize: "0.95rem",
+                      color: "#1a1a1a",
+                      fontFamily: "inherit",
+                      resize: "vertical",
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className={styles.logoutBtn}
+                    style={{ marginTop: 8 }}
+                    onClick={applyCorrection}
+                    disabled={applyingCorrection || !correctionText.trim()}
+                  >
+                    {applyingCorrection ? "Applying…" : "Apply Correction"}
+                  </button>
+                  {correctionError && (
+                    <p className={styles.error} style={{ marginTop: 8, marginBottom: 0 }}>{correctionError}</p>
+                  )}
+                  {correctionSuccess && !correctionError && (
+                    <p style={{ marginTop: 8, marginBottom: 0, color: "#16a34a", fontSize: "0.9rem" }}>
+                      Correction applied — estimate updated above.
+                    </p>
+                  )}
+                </div>
               </>
             )}
           </div>
