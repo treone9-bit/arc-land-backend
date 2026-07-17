@@ -200,6 +200,9 @@ const styles = StyleSheet.create({
     marginBottom: 3,
     lineHeight: 1.4,
   },
+  listItemInset: {
+    paddingHorizontal: 24,
+  },
   thankYou: {
     fontSize: 11,
     fontWeight: 700,
@@ -517,27 +520,39 @@ export default function QuoteDocument({
 
         {quote.assumptions.length > 0 && (
           <>
-            <Text style={styles.scopeBar}>ASSUMPTIONS</Text>
-            <View style={styles.list}>
-              {quote.assumptions.map((a, i) => (
-                <Text style={styles.listItem} key={i}>
-                  • {a}
-                </Text>
-              ))}
+            <View wrap={false} style={quote.assumptions.length === 1 ? { marginBottom: 12 } : undefined}>
+              <Text style={styles.scopeBar}>ASSUMPTIONS</Text>
+              <Text style={[styles.listItem, styles.listItemInset]}>• {quote.assumptions[0]}</Text>
             </View>
+            {quote.assumptions.length > 1 && (
+              <View style={styles.list}>
+                {quote.assumptions.slice(1).map((a, i) => (
+                  <Text style={styles.listItem} key={i}>
+                    • {a}
+                  </Text>
+                ))}
+              </View>
+            )}
           </>
         )}
 
         {quote.warnings.length > 0 && (
           <>
-            <Text style={[styles.scopeBar, { backgroundColor: "#92400e" }]}>IMPORTANT NOTICES</Text>
-            <View style={styles.list}>
-              {quote.warnings.map((w, i) => (
-                <Text style={[styles.listItem, { color: "#78350f" }]} key={i}>
-                  • {w}
-                </Text>
-              ))}
+            <View wrap={false} style={quote.warnings.length === 1 ? { marginBottom: 12 } : undefined}>
+              <Text style={[styles.scopeBar, { backgroundColor: "#92400e" }]}>IMPORTANT NOTICES</Text>
+              <Text style={[styles.listItem, styles.listItemInset, { color: "#78350f" }]}>
+                • {quote.warnings[0]}
+              </Text>
             </View>
+            {quote.warnings.length > 1 && (
+              <View style={styles.list}>
+                {quote.warnings.slice(1).map((w, i) => (
+                  <Text style={[styles.listItem, { color: "#78350f" }]} key={i}>
+                    • {w}
+                  </Text>
+                ))}
+              </View>
+            )}
           </>
         )}
 
