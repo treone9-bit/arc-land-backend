@@ -3,8 +3,10 @@ import { generateQuote, QuoteGenerationError } from "../../../../lib/quoteGenera
 import { requireAdmin } from "../../../../lib/verifyAdminRequest";
 
 // Same as /api/checkout/complete — runs the full Claude generation, needs
-// more than Vercel's default 10s serverless timeout.
-export const maxDuration = 60;
+// more than Vercel's default 10s serverless timeout. 300s is the max on
+// Vercel Pro; complex multi-trade takeoffs with extended thinking can take
+// 30-90+ seconds, so this gives comfortable headroom.
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   const user = await requireAdmin(req);

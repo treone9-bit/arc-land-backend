@@ -5,9 +5,8 @@ import { adminDb, adminStorage } from "../../../../lib/firebaseAdmin";
 
 // This route runs the full Claude generation (30-90+ seconds for complex jobs,
 // per the measured per-request cost breakdown) — Vercel's default 10s serverless
-// timeout would kill it almost every time. 60s is the max allowed on the Hobby
-// plan; upgrade to Pro (300s max) if the most complex plan takeoffs still time out.
-export const maxDuration = 60;
+// timeout would kill it almost every time. 300s is the max allowed on Pro.
+export const maxDuration = 300;
 
 type Bbox = { minLng: number; maxLng: number; minLat: number; maxLat: number };
 

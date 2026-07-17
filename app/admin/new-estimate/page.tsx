@@ -13,6 +13,18 @@ import styles from "../../page.module.css";
 type LookupMethod = "address" | "parcel_id";
 type Bbox = { minLng: number; maxLng: number; minLat: number; maxLat: number };
 
+async function parseJsonResponse<T = unknown>(res: Response): Promise<T> {
+  try {
+    return await res.json();
+  } catch {
+    throw new Error(
+      res.ok
+        ? "The server returned an unexpected response. Please try again."
+        : `Request failed (${res.status}). Please try again in a moment.`
+    );
+  }
+}
+
 function computeBbox(rings: number[][][] | null, centerLat: number, centerLng: number): Bbox {
   if (rings?.length) {
     const pts = rings.flat();
@@ -225,7 +237,7 @@ export default function AdminNewEstimatePage() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(body),
       });
-      const data: { quote?: QuoteResult; estimateId?: string | null; error?: string } = await res.json();
+      const data = await parseJsonResponse<{ quote?: QuoteResult; estimateId?: string | null; error?: string }>(res);
       if (!res.ok) throw new Error(data.error ?? "Failed to generate estimate");
 
       if (data.estimateId) {
