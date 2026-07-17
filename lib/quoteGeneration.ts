@@ -480,6 +480,25 @@ Accounting rules:
 - Labor line items: show ONLY a total dollar amount for that labor scope — no qty or per-unit rate; whole dollars
 - Include 3–8 assumptions; flag any items that need field verification`;
 
+// Reverse-engineered from Epic Consulting Group's public instant-quote tool
+// (epiconsultingroup.com/shell-contractor-services), verified linear across
+// 1,000-4,000 sqft. Admin-only, opt-in — appended to the system prompt in
+// code only when source is "admin_free" AND the admin's own instructions
+// explicitly ask for it, never for customer-facing generation and never for
+// a standalone Foundation-only job.
+const EPIC_SHELL_RATES_ADDENDUM = `== EPIC CONSULTING GROUP SUBCONTRACTOR RATES (Foundation + Shell/Framing) — ADMIN-ONLY, OPT-IN ==
+Only use this block if the admin's instructions explicitly ask for Epic Consulting Group / "Epic" / subcontractor rates for foundation or shell work. If not explicitly requested, ignore this block entirely and use the standard COMPLETE HOME BUILD foundation/exterior-shell rules above instead. This ONLY applies to the Complete Home Build service — never apply it to a standalone Foundation-only job, and never mention or use it unless explicitly asked for.
+
+When explicitly requested, REPLACE the standard Foundation line item (and the framing exclusion above) with this subcontracted package instead:
+- Foundation base rate: $19.00/sqft of total building square footage for a Steam Wall foundation, or $16.00/sqft for a Mono Slab foundation. If the foundation type isn't specified, default to Steam Wall ($19.00/sqft) and state that as an assumption.
+- Shell add-on, stacked on top of the foundation rate, based on what's specified:
+  - Interior framing included (or unspecified) — add $11.00/sqft. This bundles BOTH rough carpentry/truss installation AND interior framing — do not add a separate carpentry line on top of this.
+  - Only rough carpentry/truss installation included, framing explicitly excluded — add $7.00/sqft.
+  - Neither carpentry nor framing included — add $0/sqft (foundation only).
+- Line total = (foundation rate + add-on rate) × total building square footage. Get square footage from the plans if provided, otherwise from the admin's instructions; if truly unavailable, estimate from the stated scope and note it as an assumption.
+- Add this as a single labor line item: "Foundation & Shell — Epic Consulting Group (subcontracted)" showing only the total dollar amount (flat subcontractor package price, no qty/unit).
+- This package covers foundation, rough carpentry, and interior framing ONLY. Roofing, electrical, interior finish, exterior wall finish (siding/stucco), windows/doors, and every other trade are still priced separately using the standard rules elsewhere in this prompt.`;
+
 async function fetchAerialImageBase64(bbox: { minLng: number; maxLng: number; minLat: number; maxLat: number }): Promise<string | null> {
   try {
     const url = new URL("https://server.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/export");
@@ -613,7 +632,10 @@ export async function generateQuote(
       const includesClearing = trades.some(
         (t) => t === "Complete Land Clearing" || t === "Partial Land / Underbrush Clearing"
       );
-      const system = includesClearing ? `${PLANS_PROMPT}\n\n${LAND_CLEARING_PROMPT}` : PLANS_PROMPT;
+      let system = includesClearing ? `${PLANS_PROMPT}\n\n${LAND_CLEARING_PROMPT}` : PLANS_PROMPT;
+      if (source === "admin_free" && trades.includes("Complete Home Build")) {
+        system += `\n\n${EPIC_SHELL_RATES_ADDENDUM}`;
+      }
 
       let aerialImageBase64: string | null = null;
       if (includesClearing && mapBbox) {
@@ -838,7 +860,15 @@ export async function reviseQuote(params: ReviseQuoteParams): Promise<QuoteResul
     params.serviceType === "land_clearing" ||
     trades.some((t) => t === "Complete Land Clearing" || t === "Partial Land / Underbrush Clearing");
   const includesPlans = params.serviceType === "upload_plans";
-  const system = [includesPlans ? PLANS_PROMPT : null, includesClearing ? LAND_CLEARING_PROMPT : null]
+  const wantsCompleteBuild = trades.includes("Complete Home Build");
+  // reviseQuote is only ever reachable via the admin-only revise route, so
+  // no source check needed here — just gate on the service actually being
+  // Complete Home Build, same as generateQuote's admin_free check above.
+  const system = [
+    includesPlans ? PLANS_PROMPT : null,
+    includesClearing ? LAND_CLEARING_PROMPT : null,
+    wantsCompleteBuild ? EPIC_SHELL_RATES_ADDENDUM : null,
+  ]
     .filter(Boolean)
     .join("\n\n");
 

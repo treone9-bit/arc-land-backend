@@ -386,6 +386,7 @@ export default function EstimateDetailPage() {
                       padding: "0.55rem 0.75rem",
                       fontSize: "0.95rem",
                       color: "#1a1a1a",
+                      background: "#fff",
                       fontFamily: "inherit",
                       resize: "vertical",
                     }}
