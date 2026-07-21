@@ -1,5 +1,44 @@
-import { getDocument, OPS } from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { PDFPageProxy } from "pdfjs-dist";
+
+// pdfjs-dist's "legacy" build is meant to self-polyfill browser-only APIs
+// like DOMMatrix for older/non-browser JS environments, but that internal
+// detection doesn't reliably hold up across every Node runtime (confirmed:
+// this crashed with "DOMMatrix is not defined" on Vercel's serverless
+// runtime at module-load time, despite working locally). Installing a
+// minimal polyfill ourselves before the module ever loads sidesteps needing
+// pdf.js's own detection to succeed. It's only ever touched for a benign
+// module-scope singleton in code paths this module doesn't exercise (we
+// only use getOperatorList/getTextContent/getOptionalContentConfig, all
+// verified byte-exact against known geometry), so a minimal stub — enough
+// to construct without throwing — is sufficient.
+function installDomMatrixPolyfillIfMissing() {
+  const g = globalThis as { DOMMatrix?: unknown };
+  if (typeof g.DOMMatrix !== "undefined") return;
+  class DOMMatrixPolyfill {
+    a = 1;
+    b = 0;
+    c = 0;
+    d = 1;
+    e = 0;
+    f = 0;
+    constructor(init?: number[] | string) {
+      if (Array.isArray(init) && init.length >= 6) {
+        [this.a, this.b, this.c, this.d, this.e, this.f] = init;
+      }
+    }
+  }
+  g.DOMMatrix = DOMMatrixPolyfill;
+}
+
+type PdfjsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
+let pdfjsPromise: Promise<PdfjsModule> | null = null;
+function loadPdfjs(): Promise<PdfjsModule> {
+  if (!pdfjsPromise) {
+    installDomMatrixPolyfillIfMissing();
+    pdfjsPromise = import("pdfjs-dist/legacy/build/pdf.mjs");
+  }
+  return pdfjsPromise;
+}
 
 // Extracts real vector drawing geometry directly from a PDF's content stream,
 // instead of relying purely on Claude's vision to eyeball line lengths and
@@ -153,7 +192,12 @@ export type PdfVectorSummary = {
 const MAX_REPORTED_PER_PAGE = 40;
 const MIN_SIGNIFICANT_LENGTH = 5; // filter out tiny hatch/texture noise, in pt units
 
-async function analyzePage(page: PDFPageProxy, pageNumber: number, ocgLayerNames: string[]): Promise<PdfPageVectorSummary> {
+async function analyzePage(
+  page: PDFPageProxy,
+  pageNumber: number,
+  ocgLayerNames: string[],
+  OPS: PdfjsModule["OPS"]
+): Promise<PdfPageVectorSummary> {
   const opList = await page.getOperatorList();
   const textContent = await page.getTextContent();
   const fullText = textContent.items.map((t) => ("str" in t ? t.str : "")).join(" ");
@@ -210,6 +254,7 @@ async function analyzePage(page: PDFPageProxy, pageNumber: number, ocgLayerNames
 
 export async function analyzePdfVectorContent(buffer: Buffer, fileName: string): Promise<PdfVectorSummary | null> {
   try {
+    const { getDocument, OPS } = await loadPdfjs();
     const data = new Uint8Array(buffer);
     const doc = await getDocument({ data, useSystemFonts: true }).promise;
 
@@ -230,7 +275,7 @@ export async function analyzePdfVectorContent(buffer: Buffer, fileName: string):
     const pages: PdfPageVectorSummary[] = [];
     for (let i = 1; i <= doc.numPages; i++) {
       const page = await doc.getPage(i);
-      pages.push(await analyzePage(page, i, Array.from(new Set(ocgLayerNames))));
+      pages.push(await analyzePage(page, i, Array.from(new Set(ocgLayerNames)), OPS));
     }
 
     if (!pages.some((p) => p.isVectorRich)) return null;
