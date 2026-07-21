@@ -11,6 +11,17 @@ const nextConfig = {
   // under experimental.)
   experimental: {
     serverComponentsExternalPackages: ["firebase-admin", "pdfjs-dist"],
+    // Vercel's deploy step prunes each API route's bundle down to only files
+    // reachable via static import analysis. pdfjs-dist loads its worker
+    // script (and cmaps/font data) dynamically at runtime, so the tracer
+    // can't see that dependency and prunes it away — works locally (full
+    // node_modules always present) but 500s in production. Force-include
+    // the whole package for every route that can reach generateQuote().
+    outputFileTracingIncludes: {
+      "/api/admin/quote": ["./node_modules/pdfjs-dist/**/*"],
+      "/api/checkout/complete": ["./node_modules/pdfjs-dist/**/*"],
+      "/api/admin/estimates/[id]/revise": ["./node_modules/pdfjs-dist/**/*"],
+    },
   },
 };
 
