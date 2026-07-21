@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { adminDb, adminStorage } from "./firebaseAdmin";
+import { analyzePdfVectorContent, formatVectorSummaryForPrompt } from "./pdfVectorAnalysis";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -143,9 +144,18 @@ const FileSchema = z.object({
 
 // Files are uploaded directly to Storage by the client (see /api/upload-url);
 // the request only carries the Storage path, so we fetch bytes here.
-async function fetchFileAsBase64(path: string): Promise<string> {
+async function downloadFile(path: string): Promise<Buffer> {
   const [buffer] = await adminStorage().bucket().file(path).download();
-  return buffer.toString("base64");
+  return buffer;
+}
+
+// Best-effort: pulls exact vector geometry out of a PDF's content stream to
+// hand Claude alongside the visual plan (see lib/pdfVectorAnalysis.ts for
+// why this only helps some plan sets and silently no-ops for the rest).
+async function vectorAnalysisBlock(path: string, type: string, buffer: Buffer): Promise<string | null> {
+  if (type !== "application/pdf") return null;
+  const summary = await analyzePdfVectorContent(buffer, path.split("/").pop() ?? path);
+  return summary ? formatVectorSummaryForPrompt(summary) : null;
 }
 
 export const QuoteRequestSchema = z.object({
@@ -643,14 +653,20 @@ export async function generateQuote(
       }
 
       const planBlocks: Anthropic.MessageParam["content"] = files?.length
-        ? await Promise.all(
-            files.map(async (f) => {
-              const data = await fetchFileAsBase64(f.path);
-              return f.type === "application/pdf"
-                ? ({ type: "document", source: { type: "base64", media_type: f.type, data } } as const)
-                : ({ type: "image", source: { type: "base64", media_type: f.type, data } } as const);
-            })
-          )
+        ? (
+            await Promise.all(
+              files.map(async (f) => {
+                const buffer = await downloadFile(f.path);
+                const data = buffer.toString("base64");
+                const vectorText = await vectorAnalysisBlock(f.path, f.type, buffer);
+                const fileBlock =
+                  f.type === "application/pdf"
+                    ? ({ type: "document", source: { type: "base64", media_type: f.type, data } } as const)
+                    : ({ type: "image", source: { type: "base64", media_type: f.type, data } } as const);
+                return vectorText ? [{ type: "text" as const, text: vectorText }, fileBlock] : [fileBlock];
+              })
+            )
+          ).flat()
         : [];
 
       const contentBlocks: Anthropic.MessageParam["content"] = aerialImageBase64
@@ -760,14 +776,20 @@ export async function generateQuote(
 
     if (isPlanArea && sd?.clearingPlanFiles?.length && aerialImageBase64) {
       // Plans + satellite: compare both to determine clearing scope
-      const planBlocks: Anthropic.MessageParam["content"] = await Promise.all(
-        sd.clearingPlanFiles.map(async (f) => {
-          const data = await fetchFileAsBase64(f.path);
-          return f.type === "application/pdf"
-            ? ({ type: "document", source: { type: "base64", media_type: "application/pdf", data } } as const)
-            : ({ type: "image", source: { type: "base64", media_type: f.type as "image/png" | "image/jpeg" | "image/webp", data } } as const);
-        })
-      );
+      const planBlocks: Anthropic.MessageParam["content"] = (
+        await Promise.all(
+          sd.clearingPlanFiles.map(async (f) => {
+            const buffer = await downloadFile(f.path);
+            const data = buffer.toString("base64");
+            const vectorText = await vectorAnalysisBlock(f.path, f.type, buffer);
+            const fileBlock =
+              f.type === "application/pdf"
+                ? ({ type: "document", source: { type: "base64", media_type: "application/pdf", data } } as const)
+                : ({ type: "image", source: { type: "base64", media_type: f.type as "image/png" | "image/jpeg" | "image/webp", data } } as const);
+            return vectorText ? [{ type: "text" as const, text: vectorText }, fileBlock] : [fileBlock];
+          })
+        )
+      ).flat();
       landClearingContent = [
         { type: "text", text: "IMAGE 1 — Aerial satellite photo of the parcel (for context and tree analysis):" },
         { type: "image", source: { type: "base64", media_type: "image/png", data: aerialImageBase64 } },
