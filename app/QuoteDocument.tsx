@@ -17,67 +17,86 @@ const styles = StyleSheet.create({
     fontFamily: "Helvetica",
     fontSize: 9,
     color: "#1a1a1a",
-    paddingBottom: 40,
+    paddingTop: 55,
+    paddingBottom: 55,
   },
-  headerBar: {
-    backgroundColor: "#1a2744",
-    paddingVertical: 16,
+  runningHeader: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     paddingHorizontal: 32,
-  },
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: 700,
-    color: "#ffffff",
-    letterSpacing: 2,
-  },
-  metaRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    padding: 24,
-  },
-  label: {
-    fontSize: 8,
-    color: "#888888",
-    marginBottom: 3,
-    letterSpacing: 0.5,
-  },
-  clientName: {
-    fontSize: 11,
-    fontWeight: 700,
-    marginBottom: 2,
-  },
-  clientDetail: {
-    fontSize: 9,
-    color: "#444444",
-    marginBottom: 1,
-  },
-  companyBlock: {
-    alignItems: "flex-end",
-  },
-  logo: {
-    width: 90,
-    marginBottom: 4,
-  },
-  companyName: {
-    fontSize: 10,
-    fontWeight: 700,
-  },
-  companyDetail: {
-    fontSize: 9,
-    color: "#444444",
-  },
-  numRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingHorizontal: 24,
-    paddingBottom: 14,
+    paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: "#e5e7eb",
+    borderBottomColor: "#1a2744",
     borderBottomStyle: "solid",
   },
-  numVal: {
-    fontSize: 9,
+  runningHeaderText: {
+    fontSize: 7.5,
     fontWeight: 700,
+    color: "#1a2744",
+    letterSpacing: 0.3,
+  },
+  runningFooter: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    textAlign: "center",
+    fontSize: 7,
+    color: "#888888",
+    paddingVertical: 10,
+    borderTopWidth: 0.5,
+    borderTopColor: "#e5e7eb",
+    borderTopStyle: "solid",
+  },
+  titleBlock: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    paddingHorizontal: 32,
+    paddingTop: 10,
+    paddingBottom: 16,
+  },
+  titleText: {
+    fontSize: 24,
+    fontWeight: 700,
+    color: "#1a2744",
+  },
+  subtitleText: {
+    fontSize: 10,
+    fontStyle: "italic",
+    color: "#666666",
+    marginTop: 4,
+  },
+  titleLogo: {
+    width: 90,
+  },
+  infoBox: {
+    flexDirection: "row",
+    marginHorizontal: 32,
+    marginBottom: 20,
+    backgroundColor: "#f4f5f7",
+    borderRadius: 4,
+    padding: 14,
+  },
+  infoBoxCol: {
+    flex: 1,
+  },
+  infoLabel: {
+    fontSize: 7.5,
+    color: "#888888",
+    letterSpacing: 0.4,
+    marginBottom: 2,
+  },
+  infoValue: {
+    fontSize: 9.5,
+    fontWeight: 700,
+    color: "#1a1a1a",
+    marginBottom: 8,
   },
   scopeBar: {
     backgroundColor: "#1a2744",
@@ -180,16 +199,41 @@ const styles = StyleSheet.create({
     fontSize: 9.5,
     marginBottom: 4,
   },
-  grandTotal: {
+  totalBar: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    fontSize: 13,
-    fontWeight: 700,
+    marginHorizontal: 24,
     marginTop: 6,
-    paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: "#1a2744",
-    borderTopStyle: "solid",
+    marginBottom: 12,
+  },
+  totalBarLabel: {
+    flex: 1.4,
+    backgroundColor: "#1a2744",
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    justifyContent: "center",
+  },
+  totalBarAmountBox: {
+    flex: 1,
+    backgroundColor: "#c9971f",
+    justifyContent: "center",
+    alignItems: "flex-end",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  totalBarAmount: {
+    fontSize: 15,
+    fontWeight: 700,
+    color: "#ffffff",
+  },
+  durationText: {
+    fontSize: 9.5,
+    lineHeight: 1.5,
+    padding: 24,
+    paddingBottom: 8,
   },
   list: {
     paddingHorizontal: 24,
@@ -202,12 +246,6 @@ const styles = StyleSheet.create({
   },
   listItemWrap: {
     paddingHorizontal: 24,
-  },
-  thankYou: {
-    fontSize: 11,
-    fontWeight: 700,
-    textAlign: "center",
-    marginTop: 12,
   },
   terms: {
     fontSize: 7.5,
@@ -310,11 +348,24 @@ export type QuoteDocumentProps = {
   contactEmail: string;
   addressLine: string;
   countyLine: string;
+  parcelId?: string;
+  scopeLabel: string;
   logoUrl: string;
   mapImageUrl?: string;
   mapBbox?: Bbox;
   parcelRings?: number[][][];
 };
+
+// Derives the bid's subtitle line from the job's selected service(s), e.g.
+// "Complete Home Build — Exterior Shell Scope" or "Complete Land Clearing
+// Scope". Exported so callers (which already know the service types) can
+// compute this without QuoteDocument needing to know about serviceType/trades.
+export function computeScopeLabel(serviceTypes: string[] | null | undefined): string {
+  const types = (serviceTypes ?? []).filter(Boolean);
+  if (types.length === 0) return "Construction Scope";
+  if (types.includes("Complete Home Build")) return "Complete Home Build — Exterior Shell Scope";
+  return `${types.join(" & ")} Scope`;
+}
 
 export default function QuoteDocument({
   quote,
@@ -325,6 +376,8 @@ export default function QuoteDocument({
   contactEmail,
   addressLine,
   countyLine,
+  parcelId,
+  scopeLabel,
   logoUrl,
   mapImageUrl,
   mapBbox,
@@ -333,39 +386,56 @@ export default function QuoteDocument({
   return (
     <Document>
       <Page size="LETTER" style={styles.page}>
-        <View style={styles.headerBar}>
-          <Text style={styles.headerTitle}>ESTIMATE</Text>
+        <View style={styles.runningHeader} fixed>
+          <Text style={styles.runningHeaderText}>
+            ARC LAND DEVELOPMENT  •  arclanddevelopment@gmail.com  •  www.arclanddevelopment.net
+          </Text>
+          <Text style={styles.runningHeaderText}>Bid {estNum}</Text>
         </View>
+        <Text
+          style={styles.runningFooter}
+          fixed
+          render={({ pageNumber, totalPages }) =>
+            `ARC Land Development  •  (954) 471-1507  •  arclanddevelopment@gmail.com  •  www.arclanddevelopment.net  •  Page ${pageNumber} of ${totalPages}`
+          }
+        />
 
-        <View style={styles.metaRow}>
+        <View style={styles.titleBlock}>
           <View>
-            <Text style={styles.label}>PREPARED FOR</Text>
-            {contactName ? <Text style={styles.clientName}>{contactName}</Text> : null}
-            {contactPhone ? <Text style={styles.clientDetail}>{contactPhone}</Text> : null}
-            {contactEmail ? <Text style={styles.clientDetail}>{contactEmail}</Text> : null}
-            {addressLine ? <Text style={styles.clientDetail}>{addressLine}</Text> : null}
-            {countyLine ? <Text style={styles.clientDetail}>{countyLine}</Text> : null}
+            <Text style={styles.titleText}>CONSTRUCTION BID PROPOSAL</Text>
+            <Text style={styles.subtitleText}>{scopeLabel}</Text>
           </View>
-          <View style={styles.companyBlock}>
-            <Image src={logoUrl} style={styles.logo} />
-            <Text style={styles.companyName}>ARC Land Development</Text>
-            <Text style={styles.companyDetail}>(954) 471-1507</Text>
-          </View>
+          <Image src={logoUrl} style={styles.titleLogo} />
         </View>
 
-        <View style={styles.numRow}>
-          <Text>
-            <Text style={styles.label}>ESTIMATE # </Text>
-            <Text style={styles.numVal}>{estNum}</Text>
-          </Text>
-          <Text>
-            <Text style={styles.label}>ESTIMATE DATE </Text>
-            <Text style={styles.numVal}>{estDate}</Text>
-          </Text>
-          <Text>
-            <Text style={styles.label}>VALID FOR </Text>
-            <Text style={styles.numVal}>30 Days</Text>
-          </Text>
+        <View style={styles.infoBox}>
+          <View style={styles.infoBoxCol}>
+            <Text style={styles.infoLabel}>PREPARED FOR</Text>
+            <Text style={[styles.infoValue, { marginBottom: contactPhone || contactEmail ? 1 : 8 }]}>
+              {contactName || "—"}
+            </Text>
+            {(contactPhone || contactEmail) && (
+              <Text style={[styles.infoLabel, { fontSize: 8, color: "#444444", marginBottom: 8 }]}>
+                {[contactPhone, contactEmail].filter(Boolean).join("  •  ")}
+              </Text>
+            )}
+            <Text style={styles.infoLabel}>PROPERTY</Text>
+            <Text style={styles.infoValue}>{[addressLine, countyLine].filter(Boolean).join(", ") || "—"}</Text>
+            {parcelId ? (
+              <>
+                <Text style={styles.infoLabel}>PARCEL #</Text>
+                <Text style={[styles.infoValue, { marginBottom: 0 }]}>{parcelId}</Text>
+              </>
+            ) : null}
+          </View>
+          <View style={styles.infoBoxCol}>
+            <Text style={styles.infoLabel}>BID NUMBER</Text>
+            <Text style={styles.infoValue}>{estNum}</Text>
+            <Text style={styles.infoLabel}>BID DATE</Text>
+            <Text style={styles.infoValue}>{estDate}</Text>
+            <Text style={styles.infoLabel}>VALID FOR</Text>
+            <Text style={[styles.infoValue, { marginBottom: 0 }]}>30 Days from Issuance</Text>
+          </View>
         </View>
 
         {mapImageUrl && mapBbox && (
@@ -508,14 +578,20 @@ export default function QuoteDocument({
               <Text>{fmt(quote.disposal)}</Text>
             </View>
           )}
-          <View style={styles.totalLine}>
-            <Text>Est. Duration</Text>
-            <Text>{quote.estimatedDuration}</Text>
+        </View>
+
+        <View style={styles.totalBar} wrap={false}>
+          <View style={styles.totalBarLabel}>
+            <Text>TOTAL BID AMOUNT</Text>
           </View>
-          <View style={styles.grandTotal}>
-            <Text>ESTIMATED TOTAL</Text>
-            <Text>{fmt(quote.total)}</Text>
+          <View style={styles.totalBarAmountBox}>
+            <Text style={styles.totalBarAmount}>{fmt(quote.total)}</Text>
           </View>
+        </View>
+
+        <View wrap={false}>
+          <Text style={styles.scopeBar}>ESTIMATED DURATION</Text>
+          <Text style={styles.durationText}>{quote.estimatedDuration}</Text>
         </View>
 
         {quote.assumptions.length > 0 && (
@@ -552,22 +628,24 @@ export default function QuoteDocument({
           </>
         )}
 
-        <Text style={styles.thankYou}>Thank you for your business!</Text>
-        <Text style={styles.terms}>
-          This estimate is not a contract or invoice. It represents our best estimate of the total cost to complete
-          the work described. Final pricing may change based on field conditions, material availability, or scope
-          changes. Price change or additional materials/labor may be required — we will inform you before
-          proceeding. This estimate is valid for 30 days from the date of issuance.
-        </Text>
+        <View wrap={false}>
+          <Text style={styles.scopeBar}>ACCEPTANCE</Text>
+          <Text style={styles.terms}>
+            This document is a bid proposal, not a contract or invoice. It represents our best estimate of the total
+            cost to complete the work described. Final pricing may change based on field conditions, material
+            availability, or scope changes; the customer will be informed before any price change or additional
+            materials/labor proceeds. This bid is valid for 30 days from the date of issuance.
+          </Text>
 
-        <View style={styles.sigRow}>
-          <View style={styles.sigBlock}>
-            <View style={styles.sigLine} />
-            <Text style={styles.sigLabel}>Customer Signature</Text>
-          </View>
-          <View style={styles.sigBlock}>
-            <View style={styles.sigLine} />
-            <Text style={styles.sigLabel}>Date</Text>
+          <View style={styles.sigRow}>
+            <View style={styles.sigBlock}>
+              <View style={styles.sigLine} />
+              <Text style={styles.sigLabel}>Customer Signature / Date</Text>
+            </View>
+            <View style={styles.sigBlock}>
+              <View style={styles.sigLine} />
+              <Text style={styles.sigLabel}>ARC Land Development / Date</Text>
+            </View>
           </View>
         </View>
       </Page>

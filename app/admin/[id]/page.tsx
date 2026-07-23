@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { pdf } from "@react-pdf/renderer";
 import { clientAuth } from "../../../lib/firebaseClient";
-import QuoteDocument from "../../QuoteDocument";
+import QuoteDocument, { computeScopeLabel } from "../../QuoteDocument";
 import styles from "../admin.module.css";
 
 type Bbox = { minLng: number; maxLng: number; minLat: number; maxLat: number };
@@ -120,6 +120,8 @@ export default function EstimateDetailPage() {
           contactEmail={estimate.contactEmail ?? ""}
           addressLine={estimate.address ?? (estimate.parcelId ? `Parcel ${estimate.parcelId}` : "")}
           countyLine={countyLine}
+          parcelId={estimate.parcelId ?? undefined}
+          scopeLabel={computeScopeLabel(estimate.serviceTypes ?? estimate.trades)}
           logoUrl={`${window.location.origin}/arc-logo.png`}
           mapImageUrl={
             estimate.mapBbox
@@ -133,7 +135,7 @@ export default function EstimateDetailPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `Estimate-${estimate.estNum ?? estimate.id}.pdf`;
+      a.download = `ARC_Bid_Proposal_${estimate.estNum ?? estimate.id}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

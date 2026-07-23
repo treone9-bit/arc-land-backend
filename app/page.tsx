@@ -7,7 +7,7 @@ import type { ParcelResult } from "./api/parcel-lookup/route";
 import type { EnvironmentalResult } from "./api/environmental/route";
 import type { QuoteResult } from "../lib/quoteGeneration";
 import ServiceDetailsSection, { type ServiceData } from "./ServiceDetailsSection";
-import QuoteDocument from "./QuoteDocument";
+import QuoteDocument, { computeScopeLabel } from "./QuoteDocument";
 import FeedbackWidget from "./FeedbackWidget";
 import styles from "./page.module.css";
 
@@ -415,6 +415,8 @@ export default function Home() {
           contactEmail={contactEmail}
           addressLine={addressLine}
           countyLine={countyLine}
+          parcelId={resolvedParcelId || undefined}
+          scopeLabel={computeScopeLabel(serviceData?.serviceTypes)}
           logoUrl={`${window.location.origin}/arc-logo.png`}
           mapImageUrl={mapBbox ? `${window.location.origin}/api/map-image?minLng=${mapBbox.minLng}&maxLng=${mapBbox.maxLng}&minLat=${mapBbox.minLat}&maxLat=${mapBbox.maxLat}` : undefined}
           mapBbox={mapBbox ?? undefined}
@@ -424,7 +426,7 @@ export default function Home() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `Estimate-${estMeta.num}.pdf`;
+      a.download = `ARC_Bid_Proposal_${estMeta.num}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
