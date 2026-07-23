@@ -380,6 +380,24 @@ export default function AdminNewEstimatePage() {
               />
 
               <div className={styles.svcSection} style={{ borderTop: "1px solid #e5e7eb", paddingTop: "1.1rem", marginTop: 0 }}>
+                <h3 className={styles.svcTitle}>Estimator Directions</h3>
+                <div className={styles.field}>
+                  <label>Direct how this estimate is built (optional)</label>
+                  <textarea
+                    placeholder={'e.g. "Use Epic Consulting Group rates for the foundation and shell", "Price the roof at $400/square instead of the standard rate", "Skip grading, site is already level", "Use mono slab foundation, 2,400 sqft"'}
+                    rows={4}
+                    value={additionalNotes}
+                    onChange={(e) => setAdditionalNotes(e.target.value)}
+                  />
+                  <p className={styles.hint} style={{ marginTop: 4 }}>
+                    Read and applied before generation — pricing methodology, rate sources, quantities to assume, or
+                    scope to include/exclude. You can still fine-tune the estimate afterward with &ldquo;Request a
+                    Correction&rdquo; on the saved estimate&apos;s page.
+                  </p>
+                </div>
+              </div>
+
+              <div className={styles.svcSection} style={{ borderTop: "1px solid #e5e7eb", paddingTop: "1.1rem", marginTop: 0 }}>
                 <h3 className={styles.svcTitle}>Contact Information (optional)</h3>
                 <div className={styles.field}>
                   <label>Name</label>
@@ -401,19 +419,6 @@ export default function AdminNewEstimatePage() {
                       placeholder="you@example.com"
                     />
                   </div>
-                </div>
-              </div>
-
-              <div className={styles.svcSection} style={{ borderTop: "1px solid #e5e7eb", paddingTop: "1.1rem", marginTop: 0 }}>
-                <h3 className={styles.svcTitle}>Notes</h3>
-                <div className={styles.field}>
-                  <label>Additional Instructions (optional)</label>
-                  <textarea
-                    placeholder="Anything specific to price or call out"
-                    rows={4}
-                    value={additionalNotes}
-                    onChange={(e) => setAdditionalNotes(e.target.value)}
-                  />
                 </div>
               </div>
 

@@ -652,7 +652,11 @@ export async function generateQuote(
           ? "The construction plans are attached. Read the plans and extract quantities for each service listed."
           : "No construction plans were uploaded for this job. Base the takeoff entirely on the client's written scope of work below — estimate quantities from the description as best as reasonably possible, and note in assumptions wherever a quantity had to be inferred rather than measured.",
         scopeOfWork ? `\nCLIENT'S SCOPE OF WORK (primary description of the work needed — read carefully):\n${scopeOfWork}` : null,
-        additionalNotes ? `\nCLIENT'S ADDITIONAL INSTRUCTIONS (read carefully, apply to the estimate — this may call out a custom request, a scope change, or a detail on the plans that overrides a general assumption above):\n${additionalNotes}` : null,
+        additionalNotes
+          ? source === "admin_free"
+            ? `\nADMIN'S ESTIMATOR DIRECTIONS (from ARC's own staff, not the client — this is a direct instruction on how to build this estimate: pricing methodology, rate sources, quantities to assume, or scope to include/exclude. Follow it precisely, even where it overrides a general assumption or benchmark above):\n${additionalNotes}`
+            : `\nCLIENT'S ADDITIONAL INSTRUCTIONS (read carefully, apply to the estimate — this may call out a custom request, a scope change, or a detail on the plans that overrides a general assumption above):\n${additionalNotes}`
+          : null,
       ]
         .filter(Boolean)
         .join("\n");
@@ -785,7 +789,11 @@ export async function generateQuote(
       sd?.startDate ? `- Desired Start: ${sd.startDate}` : null,
       sd?.permitsStatus ? `- Permits: ${sd.permitsStatus}` : null,
       sd?.largerProject ? `- Part of larger build project: Yes` : null,
-      additionalNotes ? `\nCLIENT'S ADDITIONAL INSTRUCTIONS (read carefully, apply to the estimate — this may call out a custom request or a detail that overrides a general assumption above):\n${additionalNotes}` : null,
+      additionalNotes
+        ? source === "admin_free"
+          ? `\nADMIN'S ESTIMATOR DIRECTIONS (from ARC's own staff, not the client — this is a direct instruction on how to build this estimate: pricing methodology, rate sources, quantities to assume, or scope to include/exclude. Follow it precisely, even where it overrides a general assumption or benchmark above):\n${additionalNotes}`
+          : `\nCLIENT'S ADDITIONAL INSTRUCTIONS (read carefully, apply to the estimate — this may call out a custom request or a detail that overrides a general assumption above):\n${additionalNotes}`
+        : null,
     ]
       .filter(Boolean)
       .join("\n");
