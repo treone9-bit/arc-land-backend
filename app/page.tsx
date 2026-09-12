@@ -465,7 +465,9 @@ export default function Home() {
     <div className={styles.page}>
       <FeedbackWidget />
       <header className={styles.header}>
-        <img src="/arc-logo.png" alt="ARC Land Development" className={styles.headerLogo} />
+        <a href="https://arclanddevelopment.net">
+          <img src="/arc-logo.png" alt="ARC Land Development" className={styles.headerLogo} />
+        </a>
       </header>
 
       {/* ── Step 1: Lookup ───────────────────────────────────── */}
