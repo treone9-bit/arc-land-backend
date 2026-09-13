@@ -2,15 +2,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { stripeClient } from "../../../../lib/stripe";
-import { QuoteRequestSchema } from "../../../../lib/quoteGeneration";
+import { generateQuote, QuoteGenerationError, QuoteRequestSchema } from "../../../../lib/quoteGeneration";
 import { adminStorage } from "../../../../lib/firebaseAdmin";
 
 const ESTIMATE_PRICE_CENTS = 699; // $6.99 flat — automatic tax disabled until Stripe Tax is configured (see AUTOMATIC_TAX below)
 const AUTOMATIC_TAX_ENABLED = false;
 
-// Vercel's default serverless timeout (10s) can be tight for a cold start plus
-// a Storage upload plus a Stripe API round trip — give it real headroom.
-export const maxDuration = 30;
+// Temporary ad-campaign toggle: skips Stripe entirely and generates the estimate
+// for free. Set NEXT_PUBLIC_PAYMENTS_PAUSED=true (and redeploy) to enable, unset
+// to restore normal paid checkout.
+const PAYMENTS_PAUSED = process.env.NEXT_PUBLIC_PAYMENTS_PAUSED === "true";
+
+// Normally just a Storage upload + Stripe API round trip, but when
+// PAYMENTS_PAUSED is on this route runs the full Claude generation instead
+// (30-90+ seconds for complex jobs, per /api/checkout/complete) — so it needs
+// the same 300s ceiling (max allowed on Vercel Pro), not just headroom over
+// the 10s default.
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   try {
@@ -28,6 +36,18 @@ export async function POST(req: NextRequest) {
         { error: "Invalid request", details: z.flattenError(parsed.error) },
         { status: 400 }
       );
+    }
+
+    if (PAYMENTS_PAUSED) {
+      try {
+        const { quote, estMeta } = await generateQuote(parsed.data, { source: "customer" });
+        return NextResponse.json({ free: true, quote, estMeta });
+      } catch (err) {
+        const status = err instanceof QuoteGenerationError ? err.status : 500;
+        const message = err instanceof QuoteGenerationError ? err.message : "Internal error";
+        if (!(err instanceof QuoteGenerationError)) console.error("Free-mode quote generation error:", err);
+        return NextResponse.json({ error: message }, { status });
+      }
     }
 
     // Persist the full request (including any uploaded plan files) so it survives

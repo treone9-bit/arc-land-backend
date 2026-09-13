@@ -14,6 +14,11 @@ import styles from "./page.module.css";
 type Stage = "lookup" | "loading_parcel" | "job" | "loading_quote" | "done" | "error";
 type LookupMethod = "address" | "parcel_id";
 
+// Temporary ad-campaign toggle: mirrors the server flag in
+// app/api/checkout/create-session/route.ts. Set NEXT_PUBLIC_PAYMENTS_PAUSED=true
+// (and redeploy) to run estimates for free; unset to restore paid checkout.
+const PAYMENTS_PAUSED = process.env.NEXT_PUBLIC_PAYMENTS_PAUSED === "true";
+
 type Bbox = { minLng: number; maxLng: number; minLat: number; maxLat: number };
 
 type CheckoutCompleteResponse = {
@@ -120,7 +125,6 @@ export default function Home() {
   const [quote, setQuote] = useState<QuoteResult | null>(null);
   const [estMeta, setEstMeta] = useState<{ num: string; date: string } | null>(null);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
-  const [loadingPhase, setLoadingPhase] = useState<"checkout" | "generating" | null>(null);
   const [estimateRating, setEstimateRating] = useState<"up" | "down" | null>(null);
   const [estimateComment, setEstimateComment] = useState("");
   const [estimateFeedbackStatus, setEstimateFeedbackStatus] = useState<"idle" | "sending" | "sent">("idle");
@@ -162,7 +166,6 @@ export default function Home() {
     if (!sessionId || !pendingId) return;
 
     setStage("loading_quote");
-    setLoadingPhase("generating");
 
     fetch(`/api/checkout/complete?session_id=${encodeURIComponent(sessionId)}&pending_id=${encodeURIComponent(pendingId)}`)
       .then(async (res) => {
@@ -193,7 +196,6 @@ export default function Home() {
         setStage("lookup");
       })
       .finally(() => {
-        setLoadingPhase(null);
         window.history.replaceState({}, "", window.location.pathname);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -383,19 +385,32 @@ export default function Home() {
         };
       }
 
-      setLoadingPhase("checkout");
       const res = await fetch("/api/checkout/create-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data = await parseJsonResponse<{ url?: string; error?: string }>(res);
-      if (!res.ok || !data.url) throw new Error(data.error ?? "Failed to start checkout");
+      const data = await parseJsonResponse<{
+        url?: string;
+        error?: string;
+        free?: boolean;
+        quote?: QuoteResult;
+        estMeta?: { num: string; date: string };
+      }>(res);
+      if (!res.ok) throw new Error(data.error ?? "Failed to start checkout");
+
+      if (data.free) {
+        setQuote(data.quote!);
+        setEstMeta(data.estMeta!);
+        setStage("done");
+        return;
+      }
+
+      if (!data.url) throw new Error(data.error ?? "Failed to start checkout");
       window.location.href = data.url;
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Unknown error");
       setStage("job");
-      setLoadingPhase(null);
     }
   }
 
@@ -697,17 +712,17 @@ export default function Home() {
               disabled={stage === "loading_quote"}
             >
               {stage === "loading_quote"
-                ? (loadingPhase === "checkout" ? "Redirecting to payment…" : "Generating…")
-                : "Continue to Payment — $6.99"}
+                ? "Generating…"
+                : PAYMENTS_PAUSED
+                  ? "Get My Free Estimate"
+                  : "Continue to Payment — $6.99"}
             </button>
 
             {stage === "loading_quote" && (
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
                 <div className={styles.spinner} style={{ margin: 0 }} />
                 <p className={styles.loadingText} style={{ textAlign: "left", marginBottom: 0 }}>
-                  {loadingPhase === "checkout"
-                    ? "Redirecting to secure payment…"
-                    : "Payment received — building your estimate. Please keep this browser window open and avoid refreshing until it's ready."}
+                  Building your estimate. Please keep this browser window open and avoid refreshing until it&apos;s ready.
                 </p>
               </div>
             )}
