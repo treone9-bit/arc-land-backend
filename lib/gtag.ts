@@ -4,7 +4,7 @@
 // Google Ads (Tools & Settings > Conversions > your action > Tag setup >
 // Install the tag yourself). It's the part after the slash in the event
 // snippet, e.g. gtag('event', 'conversion', {'send_to': 'AW-18438758450/THIS_PART'}).
-const QUOTE_GENERATED_CONVERSION_LABEL = "";
+const QUOTE_GENERATED_CONVERSION_LABEL = "j3_ECIKQ6vccELLApNhE";
 
 const GOOGLE_ADS_ID = "AW-18438758450";
 
