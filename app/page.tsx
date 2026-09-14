@@ -9,6 +9,7 @@ import type { QuoteResult } from "../lib/quoteGeneration";
 import ServiceDetailsSection, { type ServiceData } from "./ServiceDetailsSection";
 import QuoteDocument, { computeScopeLabel } from "./QuoteDocument";
 import FeedbackWidget from "./FeedbackWidget";
+import { trackQuoteGeneratedConversion } from "../lib/gtag";
 import styles from "./page.module.css";
 
 type Stage = "lookup" | "loading_parcel" | "job" | "loading_quote" | "done" | "error";
@@ -190,6 +191,7 @@ export default function Home() {
           placeId: "",
         });
         setStage("done");
+        trackQuoteGeneratedConversion();
       })
       .catch((err) => {
         setErrorMsg(err instanceof Error ? err.message : "Failed to retrieve your estimate");
@@ -403,6 +405,7 @@ export default function Home() {
         setQuote(data.quote!);
         setEstMeta(data.estMeta!);
         setStage("done");
+        trackQuoteGeneratedConversion();
         return;
       }
 
