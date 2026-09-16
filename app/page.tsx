@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { pdf } from "@react-pdf/renderer";
+import { track } from "@vercel/analytics";
 import type { GeocodeResult } from "./api/geocode/route";
 import type { ParcelResult } from "./api/parcel-lookup/route";
 import type { EnvironmentalResult } from "./api/environmental/route";
@@ -192,6 +193,7 @@ export default function Home() {
         });
         setStage("done");
         trackQuoteGeneratedConversion();
+        track("Quote Generated", { source: "paid" });
       })
       .catch((err) => {
         setErrorMsg(err instanceof Error ? err.message : "Failed to retrieve your estimate");
@@ -406,6 +408,7 @@ export default function Home() {
         setEstMeta(data.estMeta!);
         setStage("done");
         trackQuoteGeneratedConversion();
+        track("Quote Generated", { source: "free" });
         return;
       }
 
