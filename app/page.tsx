@@ -490,6 +490,7 @@ export default function Home() {
         <a href="https://arclanddevelopment.net">
           <img src="/arc-logo.png" alt="ARC Land Development" className={styles.headerLogo} />
         </a>
+        <p>Generate an instant estimate in minutes — no waiting on site visits or phone calls.</p>
       </header>
 
       {/* ── Step 1: Lookup ───────────────────────────────────── */}
