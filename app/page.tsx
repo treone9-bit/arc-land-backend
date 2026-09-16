@@ -209,6 +209,7 @@ export default function Home() {
     e.preventDefault();
     setErrorMsg("");
     setStage("loading_parcel");
+    track("Parcel Lookup", { method: lookupMethod });
 
     try {
       let lat: number | null = null;
