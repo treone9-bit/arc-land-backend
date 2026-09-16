@@ -498,6 +498,12 @@ export default function Home() {
         <form className={styles.card} onSubmit={lookupParcel}>
           <h2 className={styles.cardTitle}>Look Up Parcel</h2>
 
+          <ol className={styles.howToSteps}>
+            <li><span className={styles.howToStepNum}>1</span>Choose Address or Parcel ID below, whichever you have on hand.</li>
+            <li><span className={styles.howToStepNum}>2</span>Enter the property&apos;s info in that field.</li>
+            <li><span className={styles.howToStepNum}>3</span>Click &quot;Look Up Parcel&quot; and we&apos;ll pull the property details automatically.</li>
+          </ol>
+
           <div className={styles.field}>
             <label>Lookup Method</label>
             <select
