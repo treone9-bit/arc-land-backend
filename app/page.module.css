@@ -30,23 +30,6 @@
   object-fit: contain;
 }
 
-.topNav {
-  display: flex;
-  justify-content: flex-end;
-  max-width: 680px;
-  margin: 0 auto 0.5rem;
-}
-
-.topNav a {
-  color: #888;
-  font-size: 0.8rem;
-  text-decoration: none;
-}
-
-.topNav a:hover {
-  text-decoration: underline;
-}
-
 .headerSub {
   color: #555;
   font-size: 0.95rem;
