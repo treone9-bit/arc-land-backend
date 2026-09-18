@@ -55,7 +55,10 @@ export type MailingMatch = {
   state: string | null;
   zip: string | null;
   matchedCounty: string | null;
+  acreage: number | null;
 };
+
+export const MIN_ACRES = 1;
 
 type ArcGISFeature = { attributes: Record<string, unknown> };
 type ArcGISQueryResponse = { features?: ArcGISFeature[]; error?: { code: number; message: string } };
@@ -68,7 +71,7 @@ async function queryFDORBatch(variants: string[], attempts = 3): Promise<ArcGISF
   url.searchParams.set("where", where);
   url.searchParams.set(
     "outFields",
-    "PARCEL_ID,OWN_NAME,OWN_ADDR1,OWN_ADDR2,OWN_CITY,OWN_STATE,OWN_ZIPCD,CO_NO"
+    "PARCEL_ID,OWN_NAME,OWN_ADDR1,OWN_ADDR2,OWN_CITY,OWN_STATE,OWN_ZIPCD,CO_NO,LND_SQFOOT"
   );
   url.searchParams.set("returnGeometry", "false");
   url.searchParams.set("f", "json");
@@ -130,6 +133,7 @@ export async function lookupMailingAddresses(
         const parcelId = str(a.PARCEL_ID);
         if (!parcelId) continue;
         const coNo = typeof a.CO_NO === "number" ? a.CO_NO : Number(a.CO_NO);
+        const sqft = a.LND_SQFOOT != null ? Number(a.LND_SQFOOT) : null;
         const match: MailingMatch = {
           ownerName: str(a.OWN_NAME),
           addr1: str(a.OWN_ADDR1),
@@ -138,6 +142,7 @@ export async function lookupMailingAddresses(
           state: str(a.OWN_STATE),
           zip: str(a.OWN_ZIPCD),
           matchedCounty: CO_NO_TO_COUNTY[coNo] ?? null,
+          acreage: sqft && !isNaN(sqft) ? Math.round((sqft / 43560) * 100) / 100 : null,
         };
         // Index by both the raw PARCEL_ID from the service and its stripped
         // form, so a lookup by either input variant finds it.
@@ -157,28 +162,41 @@ export function buildOutputWorkbook(
   matches: Map<string, MailingMatch>,
   selectedCounty: string
 ): Buffer {
-  const outRows = rows.map((row) => {
-    const rawParcel = str(row[parcelColumnKey]) ?? "";
-    const variants = normalizeVariants(rawParcel);
-    const match = variants.map((v) => matches.get(v)).find((m) => m);
+  const matched = rows
+    .map((row) => {
+      const rawParcel = str(row[parcelColumnKey]) ?? "";
+      const variants = normalizeVariants(rawParcel);
+      const match = variants.map((v) => matches.get(v)).find((m) => m);
+      return { row, match };
+    })
+    // Drop parcels we couldn't find (no acreage to verify) and anything
+    // under the minimum lot size.
+    .filter((r): r is { row: LeadRow; match: MailingMatch } =>
+      r.match != null && r.match.acreage != null && r.match.acreage >= MIN_ACRES
+    )
+    .sort((a, b) => (b.match.acreage ?? 0) - (a.match.acreage ?? 0));
 
-    let status: string;
-    if (!match) {
-      status = "Not found";
-    } else if (match.matchedCounty && match.matchedCounty !== selectedCounty) {
-      status = `Found in ${match.matchedCounty} (verify)`;
-    } else {
-      status = "Matched";
-    }
+  if (!matched.length) {
+    throw new Error(
+      `No parcels matched with ${MIN_ACRES}+ acres. Nothing to export.`
+    );
+  }
+
+  const outRows = matched.map(({ row, match }) => {
+    const status =
+      match.matchedCounty && match.matchedCounty !== selectedCounty
+        ? `Found in ${match.matchedCounty} (verify)`
+        : "Matched";
 
     return {
       ...row,
-      "Owner Mailing Address 1": match?.addr1 ?? "",
-      "Owner Mailing Address 2": match?.addr2 ?? "",
-      "Owner Mailing City": match?.city ?? "",
-      "Owner Mailing State": match?.state ?? "",
-      "Owner Mailing Zip": match?.zip ?? "",
-      "Matched County": match?.matchedCounty ?? "",
+      "Acreage": match.acreage,
+      "Owner Mailing Address 1": match.addr1 ?? "",
+      "Owner Mailing Address 2": match.addr2 ?? "",
+      "Owner Mailing City": match.city ?? "",
+      "Owner Mailing State": match.state ?? "",
+      "Owner Mailing Zip": match.zip ?? "",
+      "Matched County": match.matchedCounty ?? "",
       "Match Status": status,
     };
   });

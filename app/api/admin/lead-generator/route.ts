@@ -43,7 +43,16 @@ export async function POST(req: NextRequest) {
       .map((v) => String(v));
 
     const matches = await lookupMailingAddresses(parcelNumbers);
-    const outputBuffer = buildOutputWorkbook(rows, parcelColumnKey, matches, county);
+
+    let outputBuffer;
+    try {
+      outputBuffer = buildOutputWorkbook(rows, parcelColumnKey, matches, county);
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : "Nothing to export" },
+        { status: 400 }
+      );
+    }
 
     const filename = `${county.replace(/\s+/g, "-")}-mailing-list-${Date.now()}.xlsx`;
 

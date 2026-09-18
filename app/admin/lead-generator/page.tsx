@@ -93,7 +93,8 @@ export default function LeadGeneratorPage() {
             Upload a spreadsheet of property owner names and parcel numbers. One column header
             must contain the word &quot;Parcel&quot;. We&apos;ll look each parcel up against the
             Florida statewide property records and return the file with the owner&apos;s mailing
-            address added.
+            address added, sorted largest lot to smallest. Parcels under 1 acre, or that
+            couldn&apos;t be matched, are left out.
           </p>
 
           <div className={styles.field}>
