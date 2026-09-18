@@ -195,6 +195,7 @@ export function buildOutputWorkbook(
     return {
       ...row,
       "Acreage": match.acreage,
+      "Property Owner Name": match.ownerName ?? "",
       "Owner Mailing Address 1": match.addr1 ?? "",
       "Owner Mailing Address 2": match.addr2 ?? "",
       "Owner Mailing City": match.city ?? "",
