@@ -487,6 +487,9 @@ export default function Home() {
     <div className={styles.page}>
       <FeedbackWidget />
       <header className={styles.header}>
+        <nav className={styles.topNav}>
+          <a href="/admin/lead-generator">Lead Generator</a>
+        </nav>
         <a href="https://arclanddevelopment.net">
           <img src="/arc-logo.png" alt="ARC Land Development" className={styles.headerLogo} />
         </a>

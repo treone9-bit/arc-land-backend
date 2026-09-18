@@ -73,6 +73,9 @@ export default function AdminDashboard() {
             <span className={styles.backLink} onClick={() => router.push("/admin/feedback")}>
               View Feedback →
             </span>
+            <span className={styles.backLink} onClick={() => router.push("/admin/lead-generator")}>
+              Lead Generator →
+            </span>
             <button className={styles.logoutBtn} onClick={() => signOut(clientAuth)}>
               Sign Out
             </button>
