@@ -107,6 +107,7 @@ export default function Home() {
   const [resolvedZip, setResolvedZip] = useState("");
   const [ownerName, setOwnerName] = useState("");
   const [acreage, setAcreage] = useState("");
+  const [acreageEditable, setAcreageEditable] = useState(false);
   const [zoning, setZoning] = useState("");
   const [resolvedParcelId, setResolvedParcelId] = useState("");
 
@@ -208,6 +209,7 @@ export default function Home() {
   async function lookupParcel(e: React.FormEvent) {
     e.preventDefault();
     setErrorMsg("");
+    setAcreageEditable(false);
     setStage("loading_parcel");
     track("Parcel Lookup", { method: lookupMethod });
 
@@ -240,6 +242,15 @@ export default function Home() {
 
         if (parcelRes.status === 422 && parcelData.fallback) {
           setErrorMsg(`${parcelData.error}. Look up manually: ${parcelData.fallback}`);
+        } else if (parcelRes.status === 404) {
+          // Not every real, currently-active parcel is in the statewide dataset yet
+          // (it's a periodic snapshot, not live) — let the customer continue and
+          // enter property details manually rather than blocking them outright.
+          setErrorMsg(
+            `${parcelData.error ?? "No parcel found"} — you can still continue below and enter the property details manually.`
+          );
+          setMapBbox(computeBbox(null, lat!, lng!));
+          setAcreageEditable(true);
         } else if (!parcelRes.ok) {
           throw new Error(parcelData.error ?? "Parcel lookup failed");
         } else {
@@ -273,6 +284,15 @@ export default function Home() {
 
         if (parcelRes.status === 422 && parcelData.fallback) {
           setErrorMsg(`${parcelData.error}. Look up manually: ${parcelData.fallback}`);
+        } else if (parcelRes.status === 404) {
+          // Same reasoning as the address-lookup path — a valid parcel can still
+          // be missing from the statewide snapshot. Let the customer proceed
+          // manually instead of blocking them.
+          setErrorMsg(
+            `${parcelData.error ?? "No parcel found"} — you can still continue below and enter the property details manually.`
+          );
+          setResolvedParcelId(parcelIdInput);
+          setAcreageEditable(true);
         } else if (!parcelRes.ok) {
           throw new Error(parcelData.error ?? "Parcel lookup failed");
         } else {
@@ -466,6 +486,7 @@ export default function Home() {
     setEnv(null);
     setOwnerName("");
     setAcreage("");
+    setAcreageEditable(false);
     setZoning("");
     setResolvedParcelId("");
     setResolvedCounty("");
@@ -594,7 +615,19 @@ export default function Home() {
                 </div>
                 <div>
                   <span className={styles.label}>Acreage</span>
-                  <span>{acreage || "—"}</span>
+                  {acreageEditable ? (
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="Enter acreage"
+                      className={styles.acreageInput}
+                      value={acreage}
+                      onChange={(e) => setAcreage(e.target.value)}
+                    />
+                  ) : (
+                    <span>{acreage || "—"}</span>
+                  )}
                 </div>
                 <div>
                   <span className={styles.label}>Zoning / Land Use</span>

@@ -329,6 +329,15 @@
   letter-spacing: 0.05em;
 }
 
+.acreageInput {
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.95rem;
+  color: #111;
+  width: 100px;
+}
+
 /* ── Quote result ───────────────────────── */
 .summary {
   font-size: 0.92rem;
