@@ -22,6 +22,10 @@ function findColumnKey(headers: string[], hints: string[]): string | null {
   return null;
 }
 
+function findColumnKeys(headers: string[], hint: string): string[] {
+  return headers.filter((h) => h.toLowerCase().includes(hint));
+}
+
 export function parseUploadedWorkbook(buffer: Buffer): ParsedUpload {
   const workbook = XLSX.read(buffer, { type: "buffer" });
   const sheetName = workbook.SheetNames[0];
@@ -205,4 +209,100 @@ export function buildOutputWorkbook(
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, sheet, "Mailing List");
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+}
+
+// These are the exact header names buildOutputWorkbook() writes — used as a
+// fallback match key when the skip-tracing service's export doesn't carry a
+// parcel number column back through.
+const ADDR_COLS = {
+  addr1: "Owner Mailing Address 1",
+  city: "Owner Mailing City",
+  zip: "Owner Mailing Zip",
+};
+
+function addressKey(row: LeadRow): string | null {
+  const a1 = str(row[ADDR_COLS.addr1]);
+  const city = str(row[ADDR_COLS.city]);
+  const zip = str(row[ADDR_COLS.zip]);
+  if (!a1 || !city || !zip) return null;
+  return `${a1}|${city}|${zip}`.toLowerCase();
+}
+
+export type MergeResult = { buffer: Buffer; matchedCount: number; totalCount: number };
+
+// Merges a REISkip (or any skip-tracing service) results export back onto
+// the original generated mailing list, matching rows by parcel number when
+// both files have one, falling back to owner mailing address otherwise.
+// Any column in the results file whose header contains "phone" or "email"
+// is carried over as-is (skip-tracing exports commonly return several of
+// each, e.g. "Phone 1".."Phone 5").
+export function mergeReiskipResults(mailingListBuffer: Buffer, reiskipBuffer: Buffer): MergeResult {
+  const mailingList = XLSX.read(mailingListBuffer, { type: "buffer" });
+  const mailingSheet = mailingList.Sheets[mailingList.SheetNames[0]];
+  const mailingRows: LeadRow[] = XLSX.utils.sheet_to_json(mailingSheet, { defval: "" });
+  if (!mailingRows.length) throw new Error("The mailing list file has no data rows.");
+
+  const reiskip = XLSX.read(reiskipBuffer, { type: "buffer" });
+  const reiskipSheet = reiskip.Sheets[reiskip.SheetNames[0]];
+  const reiskipRows: LeadRow[] = XLSX.utils.sheet_to_json(reiskipSheet, { defval: "" });
+  if (!reiskipRows.length) throw new Error("The REISkip results file has no data rows.");
+
+  const mailingHeaders = Object.keys(mailingRows[0]);
+  const reiskipHeaders = Object.keys(reiskipRows[0]);
+
+  const mailingParcelKey = findColumnKey(mailingHeaders, PARCEL_COLUMN_HINTS);
+  const reiskipParcelKey = findColumnKey(reiskipHeaders, PARCEL_COLUMN_HINTS);
+
+  const contactCols = [
+    ...findColumnKeys(reiskipHeaders, "phone"),
+    ...findColumnKeys(reiskipHeaders, "email"),
+  ];
+  if (!contactCols.length) {
+    throw new Error(
+      'Could not find any phone or email columns in the REISkip file. Make sure a column header contains "Phone" or "Email".'
+    );
+  }
+
+  const byParcel = new Map<string, LeadRow>();
+  const byAddress = new Map<string, LeadRow>();
+  for (const row of reiskipRows) {
+    if (reiskipParcelKey) {
+      const parcel = str(row[reiskipParcelKey]);
+      if (parcel) for (const v of normalizeVariants(parcel)) byParcel.set(v, row);
+    }
+    const key = addressKey(row);
+    if (key) byAddress.set(key, row);
+  }
+
+  let matchedCount = 0;
+  const outRows = mailingRows.map((row) => {
+    let match: LeadRow | undefined;
+
+    if (mailingParcelKey && reiskipParcelKey) {
+      const parcel = str(row[mailingParcelKey]);
+      if (parcel) match = normalizeVariants(parcel).map((v) => byParcel.get(v)).find((m) => m);
+    }
+    if (!match) {
+      const key = addressKey(row);
+      if (key) match = byAddress.get(key);
+    }
+
+    if (match) matchedCount++;
+
+    const contactFields: LeadRow = {};
+    for (const col of contactCols) contactFields[col] = match ? match[col] ?? "" : "";
+
+    return {
+      ...row,
+      ...contactFields,
+      "REISkip Match": match ? "Matched" : "Not found",
+    };
+  });
+
+  const outSheet = XLSX.utils.json_to_sheet(outRows);
+  const outWorkbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(outWorkbook, outSheet, "Mailing List + Contacts");
+  const buffer = XLSX.write(outWorkbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+
+  return { buffer, matchedCount, totalCount: mailingRows.length };
 }
