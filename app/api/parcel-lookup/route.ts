@@ -102,9 +102,11 @@ async function queryArcGISById(
   outFields: string[]
 ): Promise<{ attrs: Record<string, unknown>; centroid: { lat: number; lng: number } | null; rings: number[][][] | null } | null> {
   // Build WHERE that matches both the raw input and the separator-stripped variant
-  // so "12-34-56", "12/34/56", and "123456" all find the same record.
+  // so "12-34-56", "12/34/56", "12.34.56", and "123456" all find the same record
+  // (STRAP-formatted IDs like Lee County's "08-45-27-L4-19096.0110" use a period
+  // before the final segment).
   const escape = (s: string) => s.replace(/'/g, "''");
-  const stripped = parcelId.replace(/[-\s/]/g, "");
+  const stripped = parcelId.replace(/[-.\s/]/g, "");
   const variants = Array.from(new Set([parcelId, stripped])).filter(Boolean);
   const where = variants
     .map((v) => `${parcelIdField} = '${escape(v)}'`)

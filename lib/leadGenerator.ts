@@ -11,7 +11,11 @@ export type ParsedUpload = {
   parcelColumnKey: string;
 };
 
-const PARCEL_COLUMN_HINTS = ["parcel"];
+// "STRAP" is Florida's standard cross-county parcel identifier and matches
+// FDOR's PARCEL_ID once punctuation is stripped — prefer it when present,
+// since some counties' own "Parcel ID" export column is an internal
+// database key that doesn't match the statewide data at all.
+const PARCEL_COLUMN_HINTS = ["strap", "parcel"];
 
 function findColumnKey(headers: string[], hints: string[]): string | null {
   const lower = headers.map((h) => h.toLowerCase());
@@ -77,7 +81,7 @@ export function parseUploadedWorkbook(buffer: Buffer): ParsedUpload {
 
 function normalizeVariants(raw: string): string[] {
   const trimmed = raw.trim();
-  const stripped = trimmed.replace(/[-\s/]/g, "");
+  const stripped = trimmed.replace(/[-.\s/]/g, "");
   return Array.from(new Set([trimmed, stripped])).filter(Boolean);
 }
 
@@ -181,7 +185,7 @@ export async function lookupMailingAddresses(
         // Index by both the raw PARCEL_ID from the service and its stripped
         // form, so a lookup by either input variant finds it.
         results.set(parcelId, match);
-        results.set(parcelId.replace(/[-\s/]/g, ""), match);
+        results.set(parcelId.replace(/[-.\s/]/g, ""), match);
       }
     }
   }
