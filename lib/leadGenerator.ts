@@ -101,7 +101,14 @@ export const MIN_ACRES = 1;
 type ArcGISFeature = { attributes: Record<string, unknown> };
 type ArcGISQueryResponse = { features?: ArcGISFeature[]; error?: { code: number; message: string } };
 
-async function queryFDORBatch(variants: string[], attempts = 3): Promise<ArcGISFeature[]> {
+// The FDOR service occasionally just hangs on a query rather than erroring
+// (observed directly — a single request can sit for 45-90s+ with zero bytes
+// back). Without a hard per-request cap, a few hung chunks combined with
+// retries can burn through the entire serverless function timeout on their
+// own, well before we get to easier chunks. Fail fast instead.
+const FDOR_REQUEST_TIMEOUT_MS = 12000;
+
+async function queryFDORBatch(variants: string[], attempts = 2): Promise<ArcGISFeature[]> {
   const escape = (s: string) => s.replace(/'/g, "''");
   const where = `PARCEL_ID IN (${variants.map((v) => `'${escape(v)}'`).join(",")})`;
 
@@ -117,14 +124,17 @@ async function queryFDORBatch(variants: string[], attempts = 3): Promise<ArcGISF
   let lastErr: Error = new Error("FDOR query failed");
   for (let i = 0; i < attempts; i++) {
     try {
-      const res = await fetch(url.toString(), { next: { revalidate: 0 } });
+      const res = await fetch(url.toString(), {
+        next: { revalidate: 0 },
+        signal: AbortSignal.timeout(FDOR_REQUEST_TIMEOUT_MS),
+      });
       if (!res.ok) throw new Error(`FDOR HTTP ${res.status}`);
       const data: ArcGISQueryResponse = await res.json();
       if (data.error) throw new Error(`FDOR error ${data.error.code}: ${data.error.message}`);
       return data.features ?? [];
     } catch (err) {
       lastErr = err instanceof Error ? err : new Error(String(err));
-      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 300));
     }
   }
   throw lastErr;
@@ -140,7 +150,7 @@ function str(v: unknown): string | null {
 // matched, so callers can look up by either the raw or separator-stripped form.
 export async function lookupMailingAddresses(
   parcelNumbers: string[],
-  concurrency = 4,
+  concurrency = 8,
   chunkSize = 40
 ): Promise<Map<string, MailingMatch>> {
   const allVariants = new Set<string>();
