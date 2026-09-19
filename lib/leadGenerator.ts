@@ -26,13 +26,43 @@ function findColumnKeys(headers: string[], hint: string): string[] {
   return headers.filter((h) => h.toLowerCase().includes(hint));
 }
 
+// County exports commonly include a land-size column in raw square feet
+// (e.g. "Land area", "Lot Size") rather than acres. Detect those and convert
+// them in place so nothing downstream (the 1+ acre filter, the final
+// spreadsheet) is ever looking at an unconverted sqft number.
+const SQFT_AREA_COLUMN_HINTS = ["land area", "lot size", "lot area"];
+
+function convertSqFtAreaColumns(rows: LeadRow[]): LeadRow[] {
+  if (!rows.length) return rows;
+  const headers = Object.keys(rows[0]);
+  const targets = headers.filter((h) => {
+    const lower = h.toLowerCase();
+    return SQFT_AREA_COLUMN_HINTS.some((hint) => lower.includes(hint)) && !lower.includes("acre");
+  });
+  if (!targets.length) return rows;
+
+  return rows.map((row) => {
+    const out: LeadRow = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (!targets.includes(key)) {
+        out[key] = value;
+        continue;
+      }
+      const sqft = typeof value === "number" ? value : parseFloat(String(value));
+      out[`${key} (acres)`] = !isNaN(sqft) ? Math.round((sqft / 43560) * 100) / 100 : "";
+    }
+    return out;
+  });
+}
+
 export function parseUploadedWorkbook(buffer: Buffer): ParsedUpload {
   const workbook = XLSX.read(buffer, { type: "buffer" });
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) throw new Error("The uploaded file has no sheets.");
   const sheet = workbook.Sheets[sheetName];
-  const rows: LeadRow[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+  let rows: LeadRow[] = XLSX.utils.sheet_to_json(sheet, { defval: "" });
   if (!rows.length) throw new Error("The uploaded file has no data rows.");
+  rows = convertSqFtAreaColumns(rows);
 
   const headers = Object.keys(rows[0]);
   const parcelColumnKey = findColumnKey(headers, PARCEL_COLUMN_HINTS);
