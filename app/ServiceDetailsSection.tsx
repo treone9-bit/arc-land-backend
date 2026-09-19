@@ -478,9 +478,7 @@ export default function ServiceDetailsSection({ onChange, mapBbox, parcelRings }
             {drawClosed && data.customClearingPolygon && (() => {
               const { sqFt } = data.customClearingPolygon;
               const acres = sqFt / 43560;
-              const display = acres >= 1
-                ? `${acres.toFixed(2)} acres`
-                : `${Math.round(sqFt).toLocaleString()} sq ft`;
+              const display = `${acres.toFixed(2)} acres`;
               return (
                 <div className={styles.areaResult}>
                   Selected clearing area: <strong>{display}</strong>
