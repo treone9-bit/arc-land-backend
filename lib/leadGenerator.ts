@@ -9,6 +9,7 @@ export type LeadRow = Record<string, unknown>;
 export type ParsedUpload = {
   rows: LeadRow[];
   parcelColumnKey: string;
+  ownerColumnKey: string | null;
 };
 
 // "STRAP" is Florida's standard cross-county parcel identifier and matches
@@ -16,6 +17,11 @@ export type ParsedUpload = {
 // since some counties' own "Parcel ID" export column is an internal
 // database key that doesn't match the statewide data at all.
 const PARCEL_COLUMN_HINTS = ["strap", "parcel"];
+
+// A county's own sales/parcel export reflects its current owner of record —
+// Florida's statewide layer is an annual snapshot and lags recent sales, so
+// prefer whatever owner name the upload already provides.
+const OWNER_COLUMN_HINTS = ["owner"];
 
 function findColumnKey(headers: string[], hints: string[]): string | null {
   const lower = headers.map((h) => h.toLowerCase());
@@ -75,8 +81,9 @@ export function parseUploadedWorkbook(buffer: Buffer): ParsedUpload {
       'Could not find a parcel number column. Make sure one of the column headers contains "Parcel".'
     );
   }
+  const ownerColumnKey = findColumnKey(headers, OWNER_COLUMN_HINTS);
 
-  return { rows, parcelColumnKey };
+  return { rows, parcelColumnKey, ownerColumnKey };
 }
 
 function normalizeVariants(raw: string): string[] {
@@ -208,7 +215,8 @@ export function buildOutputWorkbook(
   rows: LeadRow[],
   parcelColumnKey: string,
   matches: Map<string, MailingMatch>,
-  selectedCounty: string
+  selectedCounty: string,
+  ownerColumnKey: string | null = null
 ): Buffer {
   const matched = rows
     .map((row) => {
@@ -236,10 +244,16 @@ export function buildOutputWorkbook(
         ? `Found in ${match.matchedCounty} (verify)`
         : "Matched";
 
+    // Prefer the owner name already in the upload (reflects the county's own,
+    // more current record of a recent sale) over Florida's statewide layer,
+    // which is an annual snapshot and can still show the previous owner.
+    const uploadedOwnerName = ownerColumnKey ? str(row[ownerColumnKey]) : null;
+    const ownerName = uploadedOwnerName ?? match.ownerName ?? "";
+
     return {
       ...row,
       "Acreage": match.acreage,
-      "Property Owner Name": match.ownerName ?? "",
+      "Property Owner Name": ownerName,
       "Owner Mailing Address 1": match.addr1 ?? "",
       "Owner Mailing Address 2": match.addr2 ?? "",
       "Owner Mailing City": match.city ?? "",

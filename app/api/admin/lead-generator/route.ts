@@ -27,9 +27,9 @@ export async function POST(req: NextRequest) {
 
     const buffer = Buffer.from(await file.arrayBuffer());
 
-    let rows, parcelColumnKey;
+    let rows, parcelColumnKey, ownerColumnKey;
     try {
-      ({ rows, parcelColumnKey } = parseUploadedWorkbook(buffer));
+      ({ rows, parcelColumnKey, ownerColumnKey } = parseUploadedWorkbook(buffer));
     } catch (err) {
       return NextResponse.json(
         { error: err instanceof Error ? err.message : "Failed to parse the uploaded file" },
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
 
     let outputBuffer;
     try {
-      outputBuffer = buildOutputWorkbook(rows, parcelColumnKey, matches, county);
+      outputBuffer = buildOutputWorkbook(rows, parcelColumnKey, matches, county, ownerColumnKey);
     } catch (err) {
       return NextResponse.json(
         { error: err instanceof Error ? err.message : "Nothing to export" },
