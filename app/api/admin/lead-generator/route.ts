@@ -37,9 +37,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Excel frequently stores a purely-numeric column (e.g. Parcel ID
+    // "272901109") as a number rather than text, so accept both — filtering
+    // on typeof === "string" alone silently drops every row in that case.
     const parcelNumbers = rows
       .map((r) => r[parcelColumnKey])
-      .filter((v): v is string => typeof v === "string" && v.trim() !== "")
+      .filter((v): v is string | number => (typeof v === "string" || typeof v === "number") && String(v).trim() !== "")
       .map((v) => String(v));
 
     const matches = await lookupMailingAddresses(parcelNumbers);
